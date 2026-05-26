@@ -123,12 +123,14 @@ function createWebvpnNetstack(host) {
             switch (req_.type) {
                 case "webvpn_connect": {
                     const hostname = new TextDecoder().decode(req_.host);
+                    const proto = req_.network === 1 ? "udp" : "tcp";
                     try {
                         streamStatus[0] = req_.network === 1
                             ? openUDP(hostname, req_.port)
                             : openTCP(hostname, req_.port);
+                        console.log("[webvpn] connect " + proto + " " + hostname + ":" + req_.port + " -> id=" + streamStatus[0]);
                     } catch (e) {
-                        console.log("webvpn_connect failed: " + e);
+                        console.log("[webvpn] connect " + proto + " " + hostname + ":" + req_.port + " FAILED: " + e);
                         streamStatus[0] = -1;
                     }
                     return true;
@@ -163,6 +165,28 @@ function createWebvpnNetstack(host) {
                     close(req_.id);
                     streamStatus[0] = 0;
                     return true;
+                }
+                case "webvpn_dns_query": {
+                    // Pipe raw DNS wire-format bytes through DoH (RFC 8484) —
+                    // cloudflare-dns.com supports CORS, so plain fetch() works
+                    // and we skip the slow per-query UDP socket through @webvpn.
+                    return fetch("https://cloudflare-dns.com/dns-query", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type":  "application/dns-message",
+                            "Accept":        "application/dns-message",
+                        },
+                        body: req_.query,
+                    }).then(async (r) => {
+                        const bytes = new Uint8Array(await r.arrayBuffer());
+                        const n = Math.min(bytes.length, streamData.byteLength);
+                        streamData.set(bytes.subarray(0, n), 0);
+                        streamLen[0] = n;
+                        streamStatus[0] = 0;
+                    }).catch((e) => {
+                        console.log("[webvpn] dns_query failed: " + e);
+                        streamStatus[0] = -1;
+                    });
                 }
                 default:
                     return false;

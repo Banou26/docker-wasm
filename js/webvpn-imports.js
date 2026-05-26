@@ -90,6 +90,21 @@ function webvpnEnvImports(wasi) {
             Atomics.wait(streamCtrl, 0, 0);
             return 0;
         },
+
+        // webvpn_dns_query(queryP, queryLen, respP, respCap, respLenP) -> errno
+        // Pipes a DNS query (wire format) to the main-thread handler, which does
+        // DoH via @fkn/lib's serverProxyFetch and returns the raw response.
+        webvpn_dns_query: function (queryP, queryLen, respP, respCap, respLenP) {
+            const query = new Uint8Array(mem(), queryP, queryLen).slice();
+            streamCtrl[0] = 0;
+            postMessage({ type: "webvpn_dns_query", query: query });
+            Atomics.wait(streamCtrl, 0, 0);
+            if (streamStatus[0] < 0) return WEBVPN_ERRNO_INVAL;
+            const n = Math.min(streamLen[0], respCap);
+            if (n > 0) new Uint8Array(mem()).set(streamData.slice(0, n), respP);
+            new DataView(mem()).setUint32(respLenP, n, true);
+            return 0;
+        },
     };
 }
 

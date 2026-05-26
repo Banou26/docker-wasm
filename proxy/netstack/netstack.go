@@ -46,11 +46,19 @@ const (
 // build this routes through @webvpn; in tests it's net.Dial.
 type DialFunc func(network, address string) (net.Conn, error)
 
+// ResolveDNSFunc takes a raw DNS query (wire format) and returns the raw DNS
+// response. In the browser this is plumbed through @fkn/lib's serverProxyFetch
+// to a DoH endpoint — much faster than tunnelling a fresh @webvpn UDP socket
+// per query. Optional; if nil, the gateway:53 forwarder falls back to
+// dialing UpstreamDNS via Dial("udp", …).
+type ResolveDNSFunc func(query []byte) ([]byte, error)
+
 // Config configures the network stack.
 type Config struct {
 	Debug       bool
 	Dial        DialFunc // required
 	UpstreamDNS string   // e.g. "1.1.1.1:53"; if empty DNS forwarding is disabled
+	ResolveDNS  ResolveDNSFunc
 }
 
 // Network is an assembled stack ready to serve a guest connection.
@@ -126,8 +134,8 @@ func New(cfg Config) (*Network, error) {
 		return nil, fmt.Errorf("dhcp: %w", err)
 	}
 
-	if cfg.UpstreamDNS != "" {
-		if err := n.serveDNS(cfg.Dial, cfg.UpstreamDNS); err != nil {
+	if cfg.UpstreamDNS != "" || cfg.ResolveDNS != nil {
+		if err := n.serveDNS(cfg.Dial, cfg.UpstreamDNS, cfg.ResolveDNS); err != nil {
 			log.Printf("dns forwarder failed to start: %v", err)
 		}
 	}
@@ -202,7 +210,7 @@ func udpForwarder(s *stack.Stack, dial DialFunc) *udp.Forwarder {
 
 // serveDNS binds UDP on the gateway's port 53 and relays each query out through
 // dial to upstream (the guest's resolver is pointed at the gateway by DHCP).
-func (n *Network) serveDNS(dial DialFunc, upstream string) error {
+func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFunc) error {
 	conn, err := gonet.DialUDP(n.stack, &tcpip.FullAddress{
 		NIC:  nicID,
 		Addr: tcpip.AddrFrom4Slice(net.ParseIP(GatewayIP).To4()),
@@ -221,6 +229,19 @@ func (n *Network) serveDNS(dial DialFunc, upstream string) error {
 			}
 			query := append([]byte(nil), buf[:nb]...)
 			go func(query []byte, from net.Addr) {
+				// Preferred path: hand bytes to the host's DoH (no per-query
+				// UDP socket through @webvpn).
+				if resolve != nil {
+					resp, err := resolve(query)
+					if err == nil && len(resp) > 0 {
+						_, _ = conn.WriteTo(resp, from)
+						return
+					}
+					// fall through to UDP dial if DoH fails and we have one.
+					if upstream == "" {
+						return
+					}
+				}
 				up, err := dial("udp", upstream)
 				if err != nil {
 					return

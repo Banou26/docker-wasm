@@ -74,7 +74,11 @@ function connect(name, shared, conn, certbuf) {
         if (webvpn) return webvpn;
         if (typeof createWebvpnNetstack !== "function") return null;
         if (typeof webvpnConnect !== "function" || typeof webvpnDgram === "undefined") return null;
-        webvpn = createWebvpnNetstack({ net: { connect: webvpnConnect }, dgram: webvpnDgram });
+        webvpn = createWebvpnNetstack({
+            net: { connect: webvpnConnect },
+            dgram: webvpnDgram,
+            proxyFetch: typeof webvpnProxyFetch === "function" ? webvpnProxyFetch : undefined,
+        });
         return webvpn;
     }
 
@@ -85,15 +89,21 @@ function connect(name, shared, conn, certbuf) {
             // existing switch otherwise.
             if (req_.type.indexOf("webvpn_") === 0) {
                 const w = ensureWebvpn();
-                if (w && w.handle(req_, { streamStatus, streamLen, streamData })) {
+                if (!w) {
+                    streamStatus[0] = -1;
                     Atomics.store(streamCtrl, 0, 1);
                     Atomics.notify(streamCtrl, 0);
                     return;
                 }
-                // no netstack available -> signal error
-                streamStatus[0] = -1;
-                Atomics.store(streamCtrl, 0, 1);
-                Atomics.notify(streamCtrl, 0);
+                // handle() may be sync (returns true) or async (returns a Promise) —
+                // async handlers (e.g. webvpn_dns_query via proxyFetch) do their own
+                // SAB writes and we just notify when their promise settles.
+                Promise.resolve(w.handle(req_, { streamStatus, streamLen, streamData }))
+                    .catch(() => { streamStatus[0] = -1; })
+                    .then(() => {
+                        Atomics.store(streamCtrl, 0, 1);
+                        Atomics.notify(streamCtrl, 0);
+                    });
                 return;
             }
             switch (req_.type) {
