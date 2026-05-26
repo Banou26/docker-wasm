@@ -1,2 +1,8 @@
 # Built proxy binary (13 MB) — build with: GOOS=wasip1 GOARCH=wasm go build
 *.wasm
+
+# alpine-curl example: build artifacts + cloned upstream
+examples/alpine-curl/htdocs/
+examples/alpine-curl/*.png
+examples/alpine-curl/node_modules/
+examples/alpine-curl/package-lock.json
