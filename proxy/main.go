@@ -47,6 +47,7 @@ func main() {
 		Debug:       debug,
 		Dial:        dialWebvpn,
 		UpstreamDNS: upstreamDNS,
+		ResolveDNS:  resolveDNS,
 	})
 	if err != nil {
 		panic(err)

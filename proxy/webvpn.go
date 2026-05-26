@@ -54,6 +54,27 @@ func webvpn_recv(id uint32, bufP uint32, bufLen uint32, nreadP uint32, flagsP ui
 //go:wasmimport env webvpn_close
 func webvpn_close(id uint32) uint32
 
+// webvpn_dns_query pipes raw DNS wire-format bytes through DoH on the host side
+// (via @fkn/lib's serverProxyFetch). Returns 0 on success and writes the
+// response length to *respLenP; non-zero on failure.
+//
+//go:wasmimport env webvpn_dns_query
+func webvpn_dns_query(queryP uint32, queryLen uint32, respP uint32, respCap uint32, respLenP uint32) uint32
+
+// resolveDNS is the Config.ResolveDNS function the wasip1 build injects.
+func resolveDNS(query []byte) ([]byte, error) {
+	const cap = 4096 // response buffer in linear memory
+	resp := make([]byte, cap)
+	var n uint32
+	rc := webvpn_dns_query(bytesPtr(query), uint32(len(query)), bytesPtr(resp), cap, u32Ptr(&n))
+	runtime.KeepAlive(query)
+	runtime.KeepAlive(resp)
+	if rc != 0 {
+		return nil, errConnIO
+	}
+	return resp[:n], nil
+}
+
 const (
 	netTCP uint32 = 0
 	netUDP uint32 = 1
