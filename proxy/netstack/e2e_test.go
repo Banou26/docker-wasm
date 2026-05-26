@@ -155,9 +155,79 @@ func TestUDPForwardThroughProxy(t *testing.T) {
 	t.Logf("UDP round-trip OK: guest -> proxy forwarder (dst=%s) -> dial -> echo -> back (%d bytes)", gotAddr, n)
 }
 
+// TestDNSForwardThroughProxy exercises the gateway DNS forwarder: the guest's
+// resolver (pointed at the gateway by DHCP in production) sends a UDP query to
+// gateway:53, which the proxy relays out via the dial seam to an upstream
+// resolver and writes the answer back. This is what lets the builder guest
+// resolve registry hostnames (e.g. registry-1.docker.io) before pulling.
+func TestDNSForwardThroughProxy(t *testing.T) {
+	// fake upstream resolver: echoes the query back with the QR (response) bit
+	// set, so we can prove the relay round-trips without a real DNS server.
+	up, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer up.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := up.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			resp := make([]byte, n)
+			copy(resp, buf[:n])
+			if n >= 4 {
+				resp[2] |= 0x80 // set QR bit -> "this is a response"
+			}
+			up.WriteTo(resp, addr)
+		}
+	}()
+
+	// UpstreamDNS points at the fake resolver; dial is a plain pass-through.
+	guest := setupWithDNS(t, net.Dial, up.LocalAddr().String())
+
+	conn, err := gonet.DialUDP(guest, nil, &tcpip.FullAddress{
+		NIC:  1,
+		Addr: tcpip.AddrFrom4Slice(net.ParseIP(GatewayIP).To4()),
+		Port: 53,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("guest dial gateway:53 failed: %v", err)
+	}
+	defer conn.Close()
+
+	// minimal DNS query: id=0xBEEF, RD set, 1 question for "example.com" A IN.
+	query := []byte{
+		0xBE, 0xEF, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0,
+		0x00, 0x01, 0x00, 0x01,
+	}
+	if _, err := conn.Write(query); err != nil {
+		t.Fatalf("dns write: %v", err)
+	}
+	resp := make([]byte, 512)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := conn.Read(resp)
+	if err != nil {
+		t.Fatalf("dns read: %v", err)
+	}
+	if n < 4 || resp[0] != 0xBE || resp[1] != 0xEF {
+		t.Fatalf("dns response id mismatch: % x", resp[:min(n, 4)])
+	}
+	if resp[2]&0x80 == 0 {
+		t.Fatalf("dns response QR bit not set: % x", resp[:4])
+	}
+	t.Logf("DNS round-trip OK: guest -> gateway:53 -> dial -> upstream -> back (%d bytes, id=0xBEEF)", n)
+}
+
 // setup builds the proxy network + a guest stack connected to it over a
 // QEMU-framed loopback connection, and returns the guest stack.
 func setup(t *testing.T, dial DialFunc) *stack.Stack {
+	return setupWithDNS(t, dial, "")
+}
+
+func setupWithDNS(t *testing.T, dial DialFunc, upstreamDNS string) *stack.Stack {
 	t.Helper()
 
 	// loopback transport between guest and proxy (buffered, unlike net.Pipe).
@@ -180,7 +250,7 @@ func setup(t *testing.T, dial DialFunc) *stack.Stack {
 	proxyConn := <-accepted
 
 	// proxy: our netstack, egress via the supplied dial (stands in for @webvpn).
-	nw, err := New(Config{Dial: dial})
+	nw, err := New(Config{Dial: dial, UpstreamDNS: upstreamDNS})
 	if err != nil {
 		t.Fatalf("netstack.New: %v", err)
 	}
