@@ -10,10 +10,10 @@
     <header>
         <h1>Dockerfile → wasm</h1>
         <p class="lede">
-            Drop a Dockerfile. We build it with <code>docker</code> + <code>c2w</code>,
-            and run the resulting container in your browser via the
-            <a href="https://github.com/Banou26/libtorrent/tree/claude/docker-wasm-networking-pUlRm">c2w-webvpn</a>
-            netstack — real TCP/UDP egress through <code>@webvpn</code>.
+            Drop a Dockerfile. <b>No backend.</b> The build runs inside an alpine+buildah
+            image c2w'd to wasm, in your browser tab, with network egress over
+            <code>@webvpn</code> through this repo's
+            <a href="https://github.com/Banou26/libtorrent/tree/claude/docker-wasm-networking-pUlRm">c2w-webvpn</a> netstack.
         </p>
     </header>
 
@@ -21,46 +21,33 @@
         <section id="drop-zone" class="drop">
             <div class="drop-hint">
                 <svg viewBox="0 0 24 24" width="42" height="42" aria-hidden="true">
-                    <path fill="currentColor" d="M12 3 L12 15 M6 9 L12 3 L18 9 M4 18 L20 18 M4 20 L20 20"
-                          stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                          d="M12 3 L12 15 M6 9 L12 3 L18 9 M4 18 L20 18 M4 20 L20 20"/>
                 </svg>
                 <p><b>Drop a Dockerfile here</b><br>
                 or paste its contents below.</p>
             </div>
             <textarea id="paste-box" placeholder="FROM alpine:3.19&#10;RUN apk add --no-cache curl&#10;CMD [&quot;/bin/sh&quot;]" spellcheck="false"></textarea>
             <div class="actions">
-                <button id="build-btn" disabled>Build & run</button>
+                <button id="run-btn" disabled>Open in browser →</button>
                 <span id="status" class="status"></span>
             </div>
-        </section>
-
-        <section id="log-section" class="log hidden">
-            <div class="log-bar">
-                <span id="log-title">Build log</span>
-                <span id="log-meta"></span>
-            </div>
-            <pre id="log"></pre>
-        </section>
-
-        <section id="run-section" class="run hidden">
-            <p id="run-summary"></p>
-            <a id="run-link" class="primary" href="#">Open container in this tab →</a>
         </section>
 
         <details>
             <summary>How this works</summary>
             <ol>
-                <li>Frontend POSTs your Dockerfile text to <code>/api/build</code>.</li>
-                <li>Backend writes it to a tmp dir and runs <code>docker build</code>, then <code>c2w &lt;tag&gt; out.wasm</code>.</li>
-                <li>Build log is streamed back over SSE.</li>
-                <li>On success, the run link opens <code>/?net=webvpn&amp;wasm=&lt;jobId&gt;</code> — the same
-                    c2w-webvpn runtime that ships in <code>examples/alpine-curl/</code>, but pointed at your fresh wasm.</li>
-                <li>Egress goes guest → gVisor netstack → <code>@webvpn</code> → real internet. No CORS limits, real DNS,
-                    real TCP/UDP.</li>
+                <li>Your Dockerfile is base64-encoded into the URL hash (<code>#dockerfile=…</code>) — it never leaves the browser.</li>
+                <li>We navigate to the c2w-webvpn runtime page, pointing it at a single pre-built
+                    <code>playground.wasm</code> (≈150 MB, alpine + buildah, c2w'd once).</li>
+                <li>The wasm boots inside the browser. When the shell prompt appears, the page auto-types a build script:
+                    decode the Dockerfile from the hash, write to <code>/work/Dockerfile</code>, run
+                    <code>buildah --storage-driver vfs bud --isolation chroot</code>, then
+                    <code>buildah run --tty</code> to drop you into the built container.</li>
+                <li>Buildah's network — registry pulls, RUN-step <code>apk/apt</code> — flows through this repo's
+                    gVisor netstack proxy, over <code>@webvpn</code>, out to the real internet. No CORS, real DNS, real TCP/UDP.</li>
             </ol>
-            <p>Bochs is the bottleneck: even a small <code>FROM alpine</code> takes 5–10 minutes to boot
-                under x86 emulation. <code>c2w</code> itself takes ~5 min for the first build of a fresh
-                image (later builds reuse buildkit cache).</p>
+            <p>First Bochs boot takes a few minutes (full x86 emulation). Subsequent builds inside the same tab are fast.</p>
         </details>
     </main>
 

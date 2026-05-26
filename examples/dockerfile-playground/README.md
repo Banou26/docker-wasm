@@ -1,76 +1,87 @@
 # dockerfile-playground
 
-A little website where you drop a Dockerfile, the backend builds it
-(`docker build` + `c2w`) on the host, and the resulting wasm container runs in
-your browser with real TCP/UDP egress via the `c2w-webvpn` netstack.
+A website where you drop a Dockerfile and **everything happens in your browser**
+— no backend, no build server. The build runs inside an alpine+buildah image
+that's been c2w-converted to wasm once and is served as a static asset; the
+user's Dockerfile rides in via the URL hash.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  drop UI  (web/)            backend.cjs            alpine-curl/htdocs/│
-│  ───────────────────  fetch+SSE  ─────────────────  reused runtime    │
-│  paste/drop Dockerfile ───────▶ POST /api/build                       │
-│                       ◀───────  job id                                │
-│                       ◀── SSE ─ docker build … c2w …                  │
-│                                                                       │
-│  click "Run" ──────────────▶ window.location =                        │
-│                              /?net=webvpn&wasm=<jobId>                │
-│                              (runtime fetches /wasm/<jobId>/out.wasm) │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  /playground/ (drop UI)                                                   │
+│         │ base64-encode Dockerfile -> URL hash, navigate                  │
+│         ▼                                                                 │
+│  /?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>      │
+│         │                                                                 │
+│         ▼                                                                 │
+│  c2w runtime  → boots playground.wasm (alpine + buildah inside Bochs)    │
+│         │ at shell prompt, auto-types:                                    │
+│         │     write storage.conf, decode Dockerfile from hash,            │
+│         │     buildah bud, buildah run --tty                              │
+│         ▼                                                                 │
+│  c2w-webvpn netstack proxy → @webvpn → registry pulls + RUN-step network │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Nothing leaves the browser** except the actual network traffic the user's
+build needs (via @webvpn). No POST of the Dockerfile to a server; no
+server-side build queue.
 
 ## Prereqs
 
-The same dev environment that `examples/alpine-curl/build.sh` needs:
+Same setup as `examples/alpine-curl/`:
 
-- Docker with working network *inside build containers*
-- Go ≥ 1.23, `c2w` on `PATH`
-- node + npm
+- A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
+- For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
+  (vite dev) running locally; see `../alpine-curl/README.md`.
+- The alpine-curl htdocs assets must exist (`examples/alpine-curl/htdocs/`) —
+  the playground reuses them.
 
-And, for the actual run: `~/dev/fkn/webvpn` + `~/dev/fkn/web` running locally
-(see `../alpine-curl/README.md` for the recipe), with `examples/alpine-curl/`
-already built once (so its `htdocs/` exists with the netstack proxy + the
-@webvpn bundle).
+## Build the playground wasm (one-time, ≈ 5 min)
+
+```sh
+cd examples/dockerfile-playground/playground-image
+docker build -t c2w-playground-builder .
+c2w c2w-playground-builder ../web/playground.wasm
+```
+
+`playground.wasm` is the only thing that ships per-deployment. It's ~150 MB
+(alpine + buildah + busybox + a bochs emulator + a Linux kernel). The user
+downloads it once; their Dockerfiles cost zero on the build side.
 
 ## Run
 
 ```sh
-# one-time: prepare the runtime assets (proxy wasm + @webvpn bundle)
-cd examples/alpine-curl
-FKN_API="http://127.0.0.1:1234/api.html" ./build.sh
-
-# start the playground (port 8080, COOP/COEP enabled)
-cd ../dockerfile-playground
-node backend.cjs
+cd examples/dockerfile-playground
+node serve.cjs                # static, COOP/COEP, port 8080
 ```
 
-Open <http://127.0.0.1:8080/playground/>. Drop or paste a Dockerfile. After
-the build, click **Run**.
+Open <http://127.0.0.1:8080/playground/>. Drop or paste a Dockerfile. Click
+"Open in browser". Wait for Bochs to boot, then the build script auto-runs.
 
-## Try
+## What's verified vs. open
 
-A trivial first build:
+* ✅ **Architecture is wired**: drop UI → URL hash → `?wasm-url=`-driven c2w
+  runtime → playground.wasm boots → auto-paste fires the build script →
+  buildah runs inside the guest → its TCP/UDP egress flows through this repo's
+  netstack → @webvpn → real internet.
+* ✅ **Buildah parses the user's Dockerfile**, runs `STEP 1/n: FROM …`, resolves
+  the short name via `/etc/containers/registries.conf.d/00-shortnames.conf`,
+  and starts pulling.
+* ⚠️ **Registry pull reliability is the open issue.** Bochs emulation + our
+  netstack + @webvpn round-trips are slow enough that Docker Hub's TLS
+  handshake routinely exceeds buildah's 30-s connection timeout. Subsequent
+  DNS queries to the gateway DNS forwarder also start timing out under load.
+  Either we:
+  - pre-pull a small base into `playground.wasm` so first-FROM doesn't need a
+    pull, or
+  - bump buildah's connect timeout, or
+  - improve netstack performance (smarter forwarder reuse, lower per-flow
+    overhead).
 
-```dockerfile
-FROM alpine:3.19
-RUN apk add --no-cache curl
-CMD ["/bin/sh"]
-```
+## Why no backend
 
-Inside the booted shell:
-
-```sh
-echo nameserver 192.168.127.1 > /etc/resolv.conf
-curl -sS https://example.com | head -5
-```
-
-## Notes / sharp edges
-
-- **Builds are slow.** Each `c2w` run takes minutes — it ships a real x86
-  emulator + the rootfs. Subsequent builds are faster (buildkit cache).
-- **Single build at a time.** Backend serializes jobs to avoid disk/CPU thrash.
-- **Dockerfile only, no context.** v1 only accepts the Dockerfile text — no
-  `COPY` of local files. Add zip-context support if needed.
-- **No isolation of arbitrary builds.** The backend runs `docker build` on
-  whatever you drop. Trust your own input.
-- **Jobs land in `/tmp/c2w-playground/<jobId>/`.** Each is ~120 MiB; cleanup
-  is manual for now.
+Earlier iterations of this had a Node backend running `docker build` + `c2w`
+on every drop. That defeated the point of the project — the whole reason we
+built a netstack + bridged @webvpn was so build/run can happen client-side. So
+the build server is gone; what's left is a static file server + one prebuilt
+wasm.
