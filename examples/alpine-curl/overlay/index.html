@@ -85,11 +85,18 @@
           const script =
               'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
               "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
+              // Pre-pull alpine from the docker-archive baked into the image so
+              // simple `FROM alpine:*` builds don't need to hit Docker Hub —
+              // currently impossible inside Bochs (TCP RTT > 30s timeout).
+              'if [ -f /var/cache/playground/alpine.tar ]; then\n' +
+              '  echo == pre-pull baked alpine ==\n' +
+              '  buildah pull docker-archive:/var/cache/playground/alpine.tar\n' +
+              'fi\n' +
               "echo '" + dockerfileB64 + "' | base64 -d > Dockerfile\n" +
               'echo == buildah build ==\n' +
-              'buildah bud --isolation chroot -t userimg .\n' +
+              'buildah bud --isolation chroot --pull=never -t userimg .\n' +
               'echo == running container ==\n' +
-              'buildah run --tty userimg /bin/sh\n';
+              'ctr=$(buildah from userimg) && buildah run --tty "$ctr" /bin/sh\n';
 
           // Wait for the shell to be ready by watching for a "/ #" prompt in
           // xterm's screen buffer, then feed the script through the master

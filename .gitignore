@@ -6,3 +6,4 @@ examples/alpine-curl/htdocs/
 examples/alpine-curl/*.png
 examples/alpine-curl/node_modules/
 examples/alpine-curl/package-lock.json
+examples/dockerfile-playground/playground-image/alpine.tar
