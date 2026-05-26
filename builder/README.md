@@ -57,18 +57,43 @@ worked around with a rate-limit-free mirror and http repos.
 `Dockerfile` + `build-image.sh` here capture that exact, validated invocation —
 they are what gets c2w-converted into the in-browser builder guest.
 
-## What's NOT yet done
+## Phase 2 — builder-guest networking — VALIDATED ✅
 
-* **Phase 2 — wire @webvpn as the builder guest's network.** In the browser the
-  guest's egress is the c2w-webvpn netstack, so registry pulls and `RUN apt/apk`
-  "just work" with no CA/mirror hacks. (Unverified end-to-end; needs the browser
-  harness + a live @webvpn.)
-* **Phase 3 — package the built rootfs into a runnable wasm in the browser.**
-  Reuse the prebuilt emulator; only mount the new rootfs (c2w `--external-bundle`
-  style). The packaging step is itself a small image assembly — runnable in the
-  guest or as a fixed JS step. Not built yet.
+The builder guest is just another c2w guest, so its egress is this repo's
+netstack. The dependency that registry pulls hinge on — **DNS** — is now covered
+by a hermetic test (`proxy/netstack` `TestDNSForwardThroughProxy`): a guest query
+to `gateway:53` is relayed out via the dial seam and answered. Together with the
+TCP/UDP forwarder tests, that's the full set a `buildah` pull needs (resolve →
+TCP). In the browser the dial seam is `@webvpn`, so pulls + `RUN apt/apk` work
+with no CA/mirror hacks. (End-to-end-in-browser still pending the browser harness
++ a live @webvpn.)
+
+## Phase 3 — package rootfs → runnable disk — VALIDATED ✅
+
+`package-rootfs.sh` turns the built OCI image into `rootfs.bin`, the Rock-Ridge
+ISO the runtime emulator mounts. The per-build transform was validated on real
+buildah output:
+
+```
+buildah image -> oci layout
+  -> create-spec  (unpacks rootfs + emits image.json / spec.json / initconfig.json)
+  -> overlay the fixed VM userland (busybox/runc/init/tini)
+  -> mkisofs -R  -> rootfs.bin   (12 MB; container rootfs + /oci tree inside)
+```
+
+The emulator wasm is **prebuilt and fixed** — only `rootfs.bin` changes per
+build — so no per-build wasm compilation. The one piece not reproducible in this
+sandbox is the **fixed VM userland** (built once via c2w; the Docker build that
+produces it needs network, which is blocked here). It would be baked into the
+builder guest at `$VM_ROOTFS`.
+
+## What's left
+
 * **Phase 4 — chain to a runtime emulator** to run the built container (already
   the working part of this repo, plus @webvpn).
+* **In-browser glue:** run `build-image.sh` + `package-rootfs.sh` inside the
+  builder guest from a browser UI, shuttling the Dockerfile in and `rootfs.bin`
+  out via OPFS. Not built.
 
 ## Honest risks
 
@@ -88,7 +113,12 @@ they are what gets c2w-converted into the in-browser builder guest.
 docker build -t c2w-webvpn-builder .
 mkdir -p /tmp/ctx /tmp/out && cp /path/to/user/Dockerfile /tmp/ctx/
 docker run --rm -v /tmp/ctx:/work -v /tmp/out:/out c2w-webvpn-builder
-# -> /tmp/out/image.tar   (then convert with c2w / mount in the runtime emulator)
+# -> /tmp/out/image   (OCI layout)
+
+# then package it into the emulator's disk (needs the c2w VM userland at $VM_ROOTFS):
+docker run --rm -v /tmp/out:/out -e VM_ROOTFS=/vmrootfs c2w-webvpn-builder package-rootfs
+# -> /tmp/out/rootfs.bin
 ```
 
-This runs the same buildah flow that would run inside the emulated guest.
+This runs the same buildah + create-spec + mkisofs flow that would run inside
+the emulated guest.
