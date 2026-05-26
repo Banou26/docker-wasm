@@ -1,51 +1,51 @@
 # dockerfile-playground
 
-A website where you drop a Dockerfile and **everything happens in your browser**
-— no backend, no build server. The build runs inside an alpine+buildah image
-that's been c2w-converted to wasm once and is served as a static asset; the
-user's Dockerfile rides in via the URL hash.
+A website where you drop a Dockerfile and **everything happens in your browser**.
+The build runs inside an alpine+buildah image that's been c2w-converted to wasm
+once and is served as a static asset; the user's Dockerfile rides in via the
+URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  /playground/ (drop UI)                                                   │
-│         │ base64-encode Dockerfile -> URL hash, navigate                  │
-│         ▼                                                                 │
-│  /?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>      │
-│         │                                                                 │
-│         ▼                                                                 │
-│  c2w runtime  → boots playground.wasm (alpine + buildah inside Bochs)    │
-│         │ at shell prompt, auto-types:                                    │
-│         │     write storage.conf, decode Dockerfile from hash,            │
-│         │     buildah bud, buildah run --tty                              │
-│         ▼                                                                 │
-│  c2w-webvpn netstack proxy → @webvpn → registry pulls + RUN-step network │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  /playground/ (drop UI)                                                       │
+│         │ base64-encode Dockerfile -> URL hash, navigate                      │
+│         ▼                                                                     │
+│  /?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>          │
+│         │                                                                     │
+│         │   (in parallel, JS parses FROM refs from the hash and pulls each    │
+│         │    image via @fkn/lib's serverProxyFetch -> /proxy shim -> Docker   │
+│         │    Hub, assembling a docker-archive tar in memory)                  │
+│         │                                                                     │
+│         ▼                                                                     │
+│  c2w runtime → boots playground.wasm (alpine + buildah inside Bochs)         │
+│         │ at shell prompt, auto-types:                                        │
+│         │   wget http://192.168.127.1:9090/img/<ref> -O /tmp/<ref>.tar       │
+│         │   buildah pull docker-archive:/tmp/<ref>.tar                        │
+│         │   buildah bud --pull=never -t userimg .                             │
+│         │   ctr=$(buildah from userimg) && buildah run --tty "$ctr" /bin/sh  │
+│         ▼                                                                     │
+│  netstack proxy serves the pulled tar bytes at gateway:9090 via two          │
+│  wasmimports (webvpn_image_size + webvpn_image_chunk) into a JS-side cache.  │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Nothing leaves the browser** except the actual network traffic the user's
-build needs (via @webvpn). No POST of the Dockerfile to a server; no
-server-side build queue.
+**Nothing leaves the browser** except the actual Docker Hub HTTPS request,
+routed through @fkn/lib's `serverProxyFetch` chain (which sends an HTTP request
+to the page's own `/proxy` endpoint — a thin, fkn-proxy-compatible CORS
+pass-through, structurally identical to running fkn/proxy locally).
 
 ## Prereqs
-
-Same setup as `examples/alpine-curl/`:
 
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
 - For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
   (vite dev) running locally; see `../alpine-curl/README.md`.
 - The alpine-curl htdocs assets must exist (`examples/alpine-curl/htdocs/`) —
-  the playground reuses them.
+  the playground reuses them. Run `examples/alpine-curl/build.sh` once.
 
 ## Build the playground wasm (one-time, ≈ 5 min)
 
-The image bakes a `docker save`d alpine:3.19 tar so `FROM alpine:*` works
-offline — Bochs + nested @webvpn TCP can't reliably reach Docker Hub within
-buildah's 30-s deadline.
-
 ```sh
 cd examples/dockerfile-playground/playground-image
-docker pull alpine:3.19
-docker save alpine:3.19 -o alpine.tar
 docker build -t c2w-playground-builder .
 c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder ../web/playground.wasm
 ```
@@ -53,44 +53,60 @@ c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder ../web/playground.w
 `VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a
 subprocess that OOMs at the default 128 MB.
 
-`playground.wasm` is the only thing that ships per-deployment (≈ 162 MB,
-alpine + buildah + cdrkit + the docker-archive + Bochs + a Linux kernel). The
-user downloads it once; their Dockerfiles cost zero on the build side.
+`playground.wasm` is the only thing that ships per-deployment (≈ 160 MB:
+alpine + buildah + cdrkit + Bochs + a Linux kernel). The user downloads it
+once; their Dockerfiles cost zero on the build side.
 
 ## Run
 
 ```sh
+# the @fkn/lib iframe needs to know where to send proxyFetches:
+CERT_HASH=$(curl -s http://localhost:4434/cert-hash)
+cd ~/dev/fkn/web && \
+    VITE_WEBVPN_ORIGIN="https://localhost:4433" \
+    VITE_WEBVPN_CERT_HASH="$CERT_HASH" \
+    VITE_PROXY_ORIGIN="http://127.0.0.1:8080/proxy" \
+    npx vite --port 1234 --host 127.0.0.1 &
+
+# the playground itself:
 cd examples/dockerfile-playground
-node serve.cjs                # static, COOP/COEP, port 8080
+node serve.cjs    # static + /proxy (fkn-proxy-compatible CORS shim), COOP/COEP, port 8080
 ```
 
 Open <http://127.0.0.1:8080/playground/>. Drop or paste a Dockerfile. Click
-"Open in browser". Wait for Bochs to boot, then the build script auto-runs.
+"Open in browser". The JS-side starts pulling FROM images immediately; once
+Bochs boots, the auto-paste wget's the bytes from the netstack proxy's
+gateway:9090 HTTP server and `buildah pull docker-archive:` them in. Then it
+runs the user's Dockerfile and drops into `buildah run --tty` on the result.
 
-## What's verified vs. open
+## What works today
 
-* ✅ **Architecture is wired**: drop UI → URL hash → `?wasm-url=`-driven c2w
-  runtime → playground.wasm boots → auto-paste fires the build script →
-  buildah runs inside the guest → its TCP/UDP egress flows through this repo's
-  netstack → @webvpn → real internet.
-* ✅ **Buildah parses the user's Dockerfile**, runs `STEP 1/n: FROM …`, resolves
-  the short name via `/etc/containers/registries.conf.d/00-shortnames.conf`,
-  and starts pulling.
-* ⚠️ **Registry pull reliability is the open issue.** Bochs emulation + our
-  netstack + @webvpn round-trips are slow enough that Docker Hub's TLS
-  handshake routinely exceeds buildah's 30-s connection timeout. Subsequent
-  DNS queries to the gateway DNS forwarder also start timing out under load.
-  Either we:
-  - pre-pull a small base into `playground.wasm` so first-FROM doesn't need a
-    pull, or
-  - bump buildah's connect timeout, or
-  - improve netstack performance (smarter forwarder reuse, lower per-flow
-    overhead).
+* ✅ **Drop UI → URL hash → in-browser build → live container shell.**
+* ✅ **Live Docker Hub pull**: JS-side OCI Registry V2 client (registry.js)
+  authenticates anonymously, fetches manifest list + platform manifest +
+  config + layers, assembles a docker-archive tar in memory.
+* ✅ **No pre-baked images**: any Dockerfile whose FROM resolves to a public
+  registry image works.
+* ✅ **DNS via DoH**: gateway:53 queries are POSTed to Cloudflare DoH via
+  serverProxyFetch — buildah's network from inside Bochs never has to wait on
+  UDP through @webvpn.
+* ✅ **RUN steps with network**: the @webvpn netstack path still serves
+  arbitrary TCP/UDP for `RUN apk add …` etc.
+
+## Known sharp edges
+
+* Bochs emulation is slow — the build is on the order of minutes for a simple
+  `FROM alpine; CMD …`. Most of the time is spent copying the layer through
+  vfs storage; future work: a smarter storage driver or larger guest RAM.
+* The base64 hash payload caps at the URL length the browser allows (a few
+  kilobytes in practice). Larger Dockerfiles or contexts would need a
+  different transport.
 
 ## Why no backend
 
-Earlier iterations of this had a Node backend running `docker build` + `c2w`
-on every drop. That defeated the point of the project — the whole reason we
-built a netstack + bridged @webvpn was so build/run can happen client-side. So
-the build server is gone; what's left is a static file server + one prebuilt
-wasm.
+Earlier iterations had a Node backend running `docker build` + `c2w` on every
+drop. That defeated the point — the whole reason we built a netstack +
+bridged @webvpn was so build/run can happen client-side. The build server is
+gone; what's left is a static file server + a tiny fkn-proxy-compatible CORS
+shim at `/proxy` so the browser can hit registries that don't send
+`Access-Control-Allow-Origin`.

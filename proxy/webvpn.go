@@ -61,6 +61,21 @@ func webvpn_close(id uint32) uint32
 //go:wasmimport env webvpn_dns_query
 func webvpn_dns_query(queryP uint32, queryLen uint32, respP uint32, respCap uint32, respLenP uint32) uint32
 
+// webvpn_image_size returns the byte length of an in-browser-pulled image
+// (docker-archive tar) keyed by its reference. The JS side runs the OCI Registry
+// V2 client and stashes the result; the netstack proxy's gateway HTTP server
+// calls this to learn the Content-Length before streaming.
+//
+//go:wasmimport env webvpn_image_size
+func webvpn_image_size(refP uint32, refLen uint32, sizeP uint32) uint32
+
+// webvpn_image_chunk reads up to bufCap bytes starting at `offset` from the
+// pulled image's docker-archive tar. Writes the actual chunk length to nReadP.
+// Used by the gateway HTTP server to stream the tar to the guest.
+//
+//go:wasmimport env webvpn_image_chunk
+func webvpn_image_chunk(refP uint32, refLen uint32, offset uint32, bufP uint32, bufCap uint32, nReadP uint32) uint32
+
 // resolveDNS is the Config.ResolveDNS function the wasip1 build injects.
 func resolveDNS(query []byte) ([]byte, error) {
 	const cap = 4096 // response buffer in linear memory
@@ -73,6 +88,38 @@ func resolveDNS(query []byte) ([]byte, error) {
 		return nil, errConnIO
 	}
 	return resp[:n], nil
+}
+
+// wasmImagePuller implements netstack.ImagePuller via the webvpn_image_*
+// wasmimports — JS-side does the actual OCI Registry V2 pull, we just stream
+// the resulting docker-archive bytes to the guest through gateway:9090.
+type wasmImagePuller struct{}
+
+func (wasmImagePuller) Size(ref string) (int, error) {
+	rb := []byte(ref)
+	var size uint32
+	rc := webvpn_image_size(bytesPtr(rb), uint32(len(rb)), u32Ptr(&size))
+	runtime.KeepAlive(rb)
+	if rc != 0 {
+		return 0, errConnIO
+	}
+	return int(size), nil
+}
+
+func (wasmImagePuller) Chunk(ref string, offset int, buf []byte) (int, error) {
+	if len(buf) == 0 {
+		return 0, nil
+	}
+	rb := []byte(ref)
+	var n uint32
+	rc := webvpn_image_chunk(bytesPtr(rb), uint32(len(rb)), uint32(offset),
+		bytesPtr(buf), uint32(len(buf)), u32Ptr(&n))
+	runtime.KeepAlive(rb)
+	runtime.KeepAlive(buf)
+	if rc != 0 {
+		return 0, errConnIO
+	}
+	return int(n), nil
 }
 
 const (

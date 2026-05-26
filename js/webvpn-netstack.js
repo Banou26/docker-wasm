@@ -166,6 +166,44 @@ function createWebvpnNetstack(host) {
                     streamStatus[0] = 0;
                     return true;
                 }
+                case "webvpn_image_size": {
+                    // Look up a pulled image's byte length. The image cache is
+                    // populated by registry.js at page load (one entry per FROM
+                    // ref in the Dockerfile). The promise may still be pending
+                    // — await it.
+                    const ref = new TextDecoder().decode(req_.ref);
+                    const cache = globalThis.webvpnImages;
+                    const entry = cache && cache.get(ref);
+                    if (!entry) {
+                        console.log("[webvpn] image_size: not in cache: " + ref);
+                        streamStatus[0] = -1;
+                        return true;
+                    }
+                    return Promise.resolve(entry.promise || entry.bytes).then((bytes) => {
+                        entry.bytes = bytes;
+                        streamStatus[0] = bytes.length;
+                        console.log("[webvpn] image_size " + ref + " -> " + bytes.length + " bytes");
+                    }).catch((e) => {
+                        console.log("[webvpn] image_size failed: " + e);
+                        streamStatus[0] = -1;
+                    });
+                }
+                case "webvpn_image_chunk": {
+                    const ref = new TextDecoder().decode(req_.ref);
+                    const cache = globalThis.webvpnImages;
+                    const entry = cache && cache.get(ref);
+                    if (!entry || !entry.bytes) {
+                        streamStatus[0] = -1;
+                        return true;
+                    }
+                    const start = Math.max(0, req_.offset | 0);
+                    const end = Math.min(start + (req_.len | 0), entry.bytes.length);
+                    const slice = entry.bytes.subarray(start, end);
+                    if (slice.length > 0) streamData.set(slice, 0);
+                    streamLen[0] = slice.length;
+                    streamStatus[0] = 0;
+                    return true;
+                }
                 case "webvpn_dns_query": {
                     // Pipe raw DNS wire-format bytes through DoH (RFC 8484) —
                     // cloudflare-dns.com supports CORS, so plain fetch() works

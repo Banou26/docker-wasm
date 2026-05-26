@@ -24,6 +24,7 @@
     </script>
     <script src="./webvpn-bundle.js"></script>
     <script src="./webvpn-netstack.js"></script>
+    <script src="./registry.js"></script>
     <script src="./stack.js"></script>
     <script src="./ws-delegate.js"></script>
     <script>
@@ -70,28 +71,54 @@
       new TtyServer(slave).start(worker, nwStack);
 
       // In-browser dockerfile playground: if location.hash carries a base64
-      // Dockerfile, write it into the guest after the prompt appears and run
-      // buildah to build + exec into the container. No backend needed.
+      // Dockerfile, kick off the FROM-image pulls *in JS* right now (so the
+      // netstack proxy's gateway HTTP server has bytes ready by the time the
+      // guest wget's them), then when the shell prompt appears type a build
+      // script that pulls each FROM ref from gateway:9090.
       (function () {
           const m = location.hash.match(/(?:^#|&)dockerfile=([^&]+)/);
           if (!m) return;
-          const dockerfileB64 = m[1];
+          // URL-decode (location.hash leaves %xx escapes as-is) then re-pad
+          // base64 in case the caller stripped trailing '=' (busybox base64 -d
+          // in the guest is strict about padding).
+          let dockerfileB64 = decodeURIComponent(m[1]);
+          while (dockerfileB64.length % 4) dockerfileB64 += '=';
+          const dockerfileText = atob(dockerfileB64);
+          const refs = (typeof WebvpnRegistry !== "undefined")
+              ? WebvpnRegistry.dockerfileFromRefs(dockerfileText) : [];
+          if (!globalThis.webvpnImages) globalThis.webvpnImages = new Map();
+          for (const ref of refs) {
+              if (globalThis.webvpnImages.has(ref)) continue;
+              const entry = { promise: null, bytes: null };
+              globalThis.webvpnImages.set(ref, entry);
+              console.log("[registry] pulling " + ref);
+              entry.promise = WebvpnRegistry.pullImage(ref, {
+                  onLog: (s) => console.log("[registry] " + ref + ": " + s),
+              }).then((b) => { entry.bytes = b; return b });
+          }
+
           const storageConf =
               '[storage]\\n' +
               'driver = "vfs"\\n' +
               'graphroot = "/var/lib/containers/storage"\\n' +
               'runroot = "/run/containers/storage"\\n' +
               '[storage.options]\\n';
+          // Build a "wget ... && buildah pull" block per FROM ref. The guest
+          // reaches the netstack proxy's image HTTP server at gateway:9090; tar
+          // bytes come from the per-image JS cache populated above.
+          let pullBlock = '';
+          for (const ref of refs) {
+              const enc = encodeURIComponent(ref);
+              const safe = ref.replace(/[^A-Za-z0-9._-]/g, '_');
+              pullBlock +=
+                  'echo "== pull ' + ref + ' =="\n' +
+                  "wget -q 'http://192.168.127.1:9090/img/" + enc + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
+                  'buildah pull docker-archive:/tmp/' + safe + '.tar\n';
+          }
           const script =
               'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
               "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
-              // Pre-pull alpine from the docker-archive baked into the image so
-              // simple `FROM alpine:*` builds don't need to hit Docker Hub —
-              // currently impossible inside Bochs (TCP RTT > 30s timeout).
-              'if [ -f /var/cache/playground/alpine.tar ]; then\n' +
-              '  echo == pre-pull baked alpine ==\n' +
-              '  buildah pull docker-archive:/var/cache/playground/alpine.tar\n' +
-              'fi\n' +
+              pullBlock +
               "echo '" + dockerfileB64 + "' | base64 -d > Dockerfile\n" +
               'echo == buildah build ==\n' +
               'buildah bud --isolation chroot --pull=never -t userimg .\n' +

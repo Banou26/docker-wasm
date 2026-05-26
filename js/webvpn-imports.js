@@ -105,6 +105,36 @@ function webvpnEnvImports(wasi) {
             new DataView(mem()).setUint32(respLenP, n, true);
             return 0;
         },
+
+        // webvpn_image_size(refP, refLen, sizeP) -> errno
+        // Looks up an in-browser-pulled image (by ref) and returns its docker-
+        // archive byte length in *sizeP. The JS handler may await the pull
+        // Promise — the worker blocks until it's resolved.
+        webvpn_image_size: function (refP, refLen, sizeP) {
+            const ref = new Uint8Array(mem(), refP, refLen).slice();
+            streamCtrl[0] = 0;
+            postMessage({ type: "webvpn_image_size", ref: ref });
+            Atomics.wait(streamCtrl, 0, 0);
+            if (streamStatus[0] < 0) return WEBVPN_ERRNO_INVAL;
+            new DataView(mem()).setUint32(sizeP, streamStatus[0], true);
+            return 0;
+        },
+
+        // webvpn_image_chunk(refP, refLen, offset, bufP, bufCap, nReadP) -> errno
+        // Returns up to bufCap bytes starting at offset.
+        webvpn_image_chunk: function (refP, refLen, offset, bufP, bufCap, nReadP) {
+            const ref = new Uint8Array(mem(), refP, refLen).slice();
+            let cap = bufCap;
+            if (cap > streamData.byteLength) cap = streamData.byteLength;
+            streamCtrl[0] = 0;
+            postMessage({ type: "webvpn_image_chunk", ref: ref, offset: offset, len: cap });
+            Atomics.wait(streamCtrl, 0, 0);
+            if (streamStatus[0] < 0) return WEBVPN_ERRNO_INVAL;
+            const n = streamLen[0];
+            if (n > 0) new Uint8Array(mem()).set(streamData.slice(0, n), bufP);
+            new DataView(mem()).setUint32(nReadP, n, true);
+            return 0;
+        },
     };
 }
 
