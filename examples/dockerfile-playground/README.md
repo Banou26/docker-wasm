@@ -39,15 +39,21 @@ pass-through, structurally identical to running fkn/proxy locally).
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
 - For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
   (vite dev) running locally; see `../alpine-curl/README.md`.
-- The alpine-curl htdocs assets must exist (`examples/alpine-curl/htdocs/`) —
-  the playground reuses them. Run `examples/alpine-curl/build.sh` once.
+- The alpine-curl runtime must be built first — run `examples/alpine-curl/build.sh`
+  once. It populates `examples/web/runtime/public/` with `out.wasm`,
+  `c2w-webvpn-proxy.wasm`, the upstream c2w worker assets, then runs the Vite
+  build into `examples/web/runtime/dist/`.
 
 ## Build the playground wasm (one-time, ≈ 5 min)
 
 ```sh
 cd examples/dockerfile-playground/playground-image
 docker build -t c2w-playground-builder .
-c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder ../web/playground.wasm
+c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder \
+    ../../web/playground/public/playground.wasm
+
+# Re-stage into the served dist/ (Vite copies public/ -> dist/ on build):
+( cd ../../web && npm run build:playground )
 ```
 
 `VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a

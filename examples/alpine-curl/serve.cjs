@@ -3,7 +3,9 @@
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
-const root = path.join(__dirname, 'htdocs')
+// The runtime is now a Vite build in the shared workspace; serve its dist/.
+// build.sh keeps a backward-compat ./htdocs symlink pointing at the same dir.
+const root = path.join(__dirname, '..', 'web', 'runtime', 'dist')
 const port = parseInt(process.env.PORT || '8080', 10)
 const types = {
     '.html': 'text/html; charset=utf-8',

@@ -62,10 +62,11 @@ unchanged.
   poll-driven, zero-Asyncify model libtorrent's `library_fkn.js` uses.
 * `js/webvpn-imports.js` — **worker side.** Implements the wasmimports as
   blocking round-trips to the main thread over the existing SharedArrayBuffer
-  stream protocol (identical mechanism to upstream's `http_send`).
-* `js/webvpn-netstack.js` — **main-thread side.** Owns the `@webvpn` sockets and
-  per-socket ring buffers, serviced on each worker round-trip. Ports the
-  copy-on-receive discipline from `library_fkn.js`.
+  stream protocol (identical mechanism to upstream's `http_send`). This stays
+  plain JS because it's `importScripts()`'d into the c2w stack worker.
+* `examples/web/runtime/src/webvpn-netstack.ts` — **main-thread side.** Owns
+  the `@webvpn` sockets and per-socket ring buffers, serviced on each worker
+  round-trip. Ports the copy-on-receive discipline from `library_fkn.js`.
 
 ## Build
 
@@ -82,9 +83,11 @@ This is a drop-in replacement for `c2w-net-proxy.wasm`. Start from
 container2wasm's [`examples/wasi-browser`](https://github.com/ktock/container2wasm/tree/main/examples/wasi-browser)
 (or `examples/emscripten` for the QEMU/emscripten variant) and make three edits:
 
-1. **Serve the files.** Put `c2w-webvpn-proxy.wasm` in `htdocs/`, and copy
-   `js/webvpn-imports.js` + `js/webvpn-netstack.js` there too. Point the stack
-   worker at our proxy (`stackImageName = "c2w-webvpn-proxy.wasm"`).
+1. **Serve the files.** Put `c2w-webvpn-proxy.wasm` next to your other static
+   assets and copy `js/webvpn-imports.js` there too (the in-repo runtime keeps
+   the main-thread side in `examples/web/runtime/src/webvpn-netstack.ts`).
+   Point the stack worker at our proxy
+   (`stackImageName = "c2w-webvpn-proxy.wasm"`).
 
 2. **Worker side** (`stack-worker.js`) — register the egress imports:
 
