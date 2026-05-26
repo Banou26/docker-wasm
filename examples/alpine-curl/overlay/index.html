@@ -45,10 +45,16 @@
 
       var nwStack;
       var netParam = getNetParam();
-      // Allow the served container wasm to come from a per-job path so the
-      // dockerfile-playground can swap in freshly-built images via ?wasm=<id>.
-      var wasmId = new URLSearchParams(location.search).get('wasm');
-      var workerImage = location.origin + (wasmId ? "/wasm/" + wasmId + "/out.wasm" : "/out.wasm");
+      // Override the container wasm URL via either:
+      //   ?wasm-url=/playground.wasm   (any URL — used by the in-browser playground)
+      //   ?wasm=<jobId>                (legacy backend-built; resolves to /wasm/<id>/out.wasm)
+      // Default is /out.wasm.
+      var queryParams = new URLSearchParams(location.search);
+      var wasmUrl = queryParams.get('wasm-url');
+      var wasmId  = queryParams.get('wasm');
+      var workerImage = wasmUrl
+          ? new URL(wasmUrl, location.href).toString()
+          : location.origin + (wasmId ? "/wasm/" + wasmId + "/out.wasm" : "/out.wasm");
       if (netParam) {
           if (netParam.mode == 'delegate') {
               nwStack = delegate(worker, workerImage, netParam.param);
@@ -62,6 +68,52 @@
           worker.postMessage({type: "init", imagename: workerImage});
       }
       new TtyServer(slave).start(worker, nwStack);
+
+      // In-browser dockerfile playground: if location.hash carries a base64
+      // Dockerfile, write it into the guest after the prompt appears and run
+      // buildah to build + exec into the container. No backend needed.
+      (function () {
+          const m = location.hash.match(/(?:^#|&)dockerfile=([^&]+)/);
+          if (!m) return;
+          const dockerfileB64 = m[1];
+          const storageConf =
+              '[storage]\\n' +
+              'driver = "vfs"\\n' +
+              'graphroot = "/var/lib/containers/storage"\\n' +
+              'runroot = "/run/containers/storage"\\n' +
+              '[storage.options]\\n';
+          const script =
+              'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
+              "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
+              "echo '" + dockerfileB64 + "' | base64 -d > Dockerfile\n" +
+              'echo == buildah build ==\n' +
+              'buildah bud --isolation chroot -t userimg .\n' +
+              'echo == running container ==\n' +
+              'buildah run --tty userimg /bin/sh\n';
+
+          // Wait for the shell to be ready by watching for a "/ #" prompt in
+          // xterm's screen buffer, then feed the script through the master
+          // (xterm-pty exposes a `notify` event to send input back to the PTY,
+          // but the simplest robust path is to dispatch keydown events through
+          // the terminal's onKey handler — falls through to slave stdin).
+          let sent = false;
+          const tryFeed = () => {
+              if (sent) return;
+              const buf = xterm.buffer.active;
+              const cursorRow = buf.baseY + buf.cursorY;
+              let last = '';
+              for (let y = Math.max(0, cursorRow - 2); y <= cursorRow; y++) {
+                  const line = buf.getLine(y);
+                  if (line) last += line.translateToString(true);
+              }
+              if (!/# *$/.test(last)) return;
+              sent = true;
+              // Feed each character through xterm-pty's master so the PTY sees
+              // it as keyboard input. xterm.paste() goes through the same path.
+              xterm.paste(script);
+          };
+          const iv = setInterval(() => { tryFeed(); if (sent) clearInterval(iv); }, 1000);
+      })();
 
       function getNetParam() {
           var vars = location.search.substring(1).split('&');
