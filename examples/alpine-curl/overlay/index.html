@@ -45,7 +45,10 @@
 
       var nwStack;
       var netParam = getNetParam();
-      var workerImage = location.origin + "/out.wasm";
+      // Allow the served container wasm to come from a per-job path so the
+      // dockerfile-playground can swap in freshly-built images via ?wasm=<id>.
+      var wasmId = new URLSearchParams(location.search).get('wasm');
+      var workerImage = location.origin + (wasmId ? "/wasm/" + wasmId + "/out.wasm" : "/out.wasm");
       if (netParam) {
           if (netParam.mode == 'delegate') {
               nwStack = delegate(worker, workerImage, netParam.param);
