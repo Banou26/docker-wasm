@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -35,11 +34,12 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "debug log")
 	flag.Parse()
 
+	// Always send our own log.Println output to stderr so we can see startup,
+	// dial errors etc. --debug only escalates the gvisor-tap-vsock verbosity.
+	log.SetOutput(os.Stderr)
 	if debug {
-		log.SetOutput(os.Stderr)
 		logrus.SetLevel(logrus.DebugLevel)
 	} else {
-		log.SetOutput(io.Discard)
 		logrus.SetLevel(logrus.FatalLevel)
 	}
 
