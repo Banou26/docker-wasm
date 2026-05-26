@@ -48,6 +48,7 @@ func main() {
 		Dial:        dialWebvpn,
 		UpstreamDNS: upstreamDNS,
 		ResolveDNS:  resolveDNS,
+		ImagePuller: wasmImagePuller{},
 	})
 	if err != nil {
 		panic(err)

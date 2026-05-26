@@ -49,9 +49,99 @@ function serveFile(res, full) {
     })
 }
 
+// fkn-proxy-compatible shim. @fkn/lib's serverProxyFetch (in fkn/web) sends
+// fetches here with fkn-proxy-{protocol,hostname,pathname,search,headers}
+// describing the *real* target. We reconstruct, fetch upstream, and return the
+// upstream response with its headers re-packed under fkn-proxy-headers so the
+// caller sees the real status/headers/body. CORS headers are set so the
+// cross-origin fkn/web iframe (e.g. http://127.0.0.1:1234) can reach us.
+//
+// This is a drop-in for fkn/proxy when you don't need anti-bot / Postgres
+// caching — for plain Docker Hub HTTPS it's all we need.
+async function handleProxy(req, res) {
+    try {
+        const protocol = (req.headers['fkn-proxy-protocol'] || 'https').toString()
+        const hostname = req.headers['fkn-proxy-hostname']
+        const pathname = req.headers['fkn-proxy-pathname'] || '/'
+        const search   = req.headers['fkn-proxy-search']   || ''
+        if (!hostname) { res.writeHead(400); return res.end('missing fkn-proxy-hostname') }
+        const target = protocol + '://' + hostname + pathname + search
+
+        // Reconstruct upstream headers from the b64 JSON envelope. The JSON
+        // shape comes from serverProxyFetch passing init.headers through
+        // JSON.stringify(...) — handle both record and tuple-array forms.
+        let upstreamHeaders = {}
+        const hdrB64 = req.headers['fkn-proxy-headers']
+        if (hdrB64) {
+            try {
+                const parsed = JSON.parse(Buffer.from(hdrB64.toString(), 'base64').toString('utf8'))
+                if (Array.isArray(parsed)) {
+                    for (const [k, v] of parsed) upstreamHeaders[k] = v
+                } else if (parsed && typeof parsed === 'object') {
+                    upstreamHeaders = parsed
+                }
+            } catch (_) {}
+        }
+
+        let body
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            const chunks = []
+            for await (const c of req) chunks.push(c)
+            if (chunks.length) body = Buffer.concat(chunks)
+        }
+
+        const up = await globalThis.fetch(target, {
+            method: req.method,
+            headers: upstreamHeaders,
+            body,
+            // Follow registry redirects (Docker Hub 307s blob fetches to a CDN).
+            // Spec-compliant clients strip Authorization on cross-origin
+            // redirects automatically, which matches the registry expectation
+            // that CDN URLs are pre-signed.
+            redirect: 'follow',
+        })
+        const respHeadersObj = {}
+        up.headers.forEach((v, k) => { respHeadersObj[k] = v })
+        // @fkn/lib's serverProxyFetch loses Response.status when it rebuilds the
+        // Response on the client side (`new Response(body, {...response, headers}`
+        // doesn't copy status). Smuggle the real status through the headers
+        // payload so the client can read it back via headers.get('x-upstream-status').
+        respHeadersObj['x-upstream-status'] = String(up.status)
+        const buf = Buffer.from(await up.arrayBuffer())
+        res.writeHead(up.status, {
+            ...coiHeaders,
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Expose-Headers': 'fkn-proxy-headers, Content-Length, Content-Type',
+            'Content-Length': buf.length,
+            'Content-Type': up.headers.get('content-type') || 'application/octet-stream',
+            'fkn-proxy-headers': Buffer.from(JSON.stringify(respHeadersObj), 'utf8').toString('base64'),
+        })
+        res.end(buf)
+    } catch (e) {
+        res.writeHead(502); res.end('proxy error: ' + e.message)
+    }
+}
+
 http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x')
     const p = u.pathname
+
+    // CORS preflight for /proxy (cross-origin fkn/web iframe will preflight)
+    if (req.method === 'OPTIONS' && p === '/proxy') {
+        res.writeHead(204, {
+            ...coiHeaders,
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'fkn-proxy-protocol, fkn-proxy-hostname, fkn-proxy-pathname, fkn-proxy-search, fkn-proxy-headers, fkn-proxy-render, content-type',
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Max-Age': '86400',
+        })
+        return res.end()
+    }
+    if (p === '/proxy') {
+        return handleProxy(req, res)
+    }
 
     // /playground/* -> the drop UI + playground.wasm
     if (p === '/playground' || p === '/playground/' || p.startsWith('/playground/')) {

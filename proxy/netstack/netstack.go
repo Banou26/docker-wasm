@@ -11,6 +11,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/services/forwarder"
@@ -53,12 +57,26 @@ type DialFunc func(network, address string) (net.Conn, error)
 // dialing UpstreamDNS via Dial("udp", …).
 type ResolveDNSFunc func(query []byte) ([]byte, error)
 
+// ImagePuller streams an in-browser-pulled docker-archive tar to the guest via
+// a gateway HTTP server (default :9090). JS side runs the OCI Registry V2
+// client (via @fkn/lib's serverProxyFetch) and stashes the resulting bytes per
+// ref; we just byte-pump through the netstack to whatever runs in the guest
+// (e.g. `wget http://192.168.127.1:9090/img/<ref>` piped to buildah pull).
+type ImagePuller interface {
+	Size(ref string) (int, error)
+	Chunk(ref string, offset int, buf []byte) (int, error)
+}
+
+// ImageHTTPPort is the gateway port the image-streaming server listens on.
+const ImageHTTPPort = 9090
+
 // Config configures the network stack.
 type Config struct {
 	Debug       bool
 	Dial        DialFunc // required
 	UpstreamDNS string   // e.g. "1.1.1.1:53"; if empty DNS forwarding is disabled
 	ResolveDNS  ResolveDNSFunc
+	ImagePuller ImagePuller
 }
 
 // Network is an assembled stack ready to serve a guest connection.
@@ -137,6 +155,12 @@ func New(cfg Config) (*Network, error) {
 	if cfg.UpstreamDNS != "" || cfg.ResolveDNS != nil {
 		if err := n.serveDNS(cfg.Dial, cfg.UpstreamDNS, cfg.ResolveDNS); err != nil {
 			log.Printf("dns forwarder failed to start: %v", err)
+		}
+	}
+
+	if cfg.ImagePuller != nil {
+		if err := n.serveImageHTTP(cfg.ImagePuller); err != nil {
+			log.Printf("image http server failed to start: %v", err)
 		}
 	}
 
@@ -258,6 +282,63 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 				}
 				_, _ = conn.WriteTo(resp[:rn], from)
 			}(query, from)
+		}
+	}()
+	return nil
+}
+
+// serveImageHTTP listens on the gateway's port (default 9090) and serves
+// `/img/<ref>` by pulling sized chunks from puller. The guest's auto-paste
+// script does `wget http://192.168.127.1:9090/img/<ref>` to drop the
+// docker-archive tar into /tmp before `buildah pull docker-archive:`.
+func (n *Network) serveImageHTTP(puller ImagePuller) error {
+	l, err := gonet.ListenTCP(n.stack, tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFrom4Slice(net.ParseIP(GatewayIP).To4()),
+		Port: ImageHTTPPort,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		return err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/img/", func(w http.ResponseWriter, r *http.Request) {
+		ref := strings.TrimPrefix(r.URL.Path, "/img/")
+		ref, err := url.PathUnescape(ref)
+		if err != nil {
+			http.Error(w, "bad ref", http.StatusBadRequest)
+			return
+		}
+		size, err := puller.Size(ref)
+		if err != nil || size <= 0 {
+			log.Printf("imageHTTP size(%s) failed: size=%d err=%v", ref, size, err)
+			http.Error(w, "image not available", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-tar")
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.WriteHeader(http.StatusOK)
+		// Stream in 4 KiB chunks (matches the SAB data window on the JS bridge).
+		buf := make([]byte, 4096)
+		offset := 0
+		for offset < size {
+			want := size - offset
+			if want > len(buf) {
+				want = len(buf)
+			}
+			nb, err := puller.Chunk(ref, offset, buf[:want])
+			if err != nil || nb == 0 {
+				return
+			}
+			if _, err := w.Write(buf[:nb]); err != nil {
+				return
+			}
+			offset += nb
+		}
+	})
+	srv := &http.Server{Handler: mux}
+	go func() {
+		if err := srv.Serve(l); err != nil {
+			log.Printf("image http server exited: %v", err)
 		}
 	}()
 	return nil
