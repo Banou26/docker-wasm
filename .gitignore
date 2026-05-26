@@ -1,9 +1,25 @@
-# Built proxy binary (13 MB) — build with: GOOS=wasip1 GOARCH=wasm go build
+# --- Build outputs ---------------------------------------------------------
+
+# Built wasm artifacts (c2w-webvpn-proxy.wasm, out.wasm, playground.wasm, …).
 *.wasm
 
-# alpine-curl example: build artifacts + cloned upstream
-examples/alpine-curl/htdocs/
+# JS/TS toolchains (Vite, Rollup, TypeScript, esbuild).
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Emscripten cache (bindings/wasm builds), wasm-pack output.
+.em_cache/
+bindings/wasm/build/
+
+# --- example-specific -----------------------------------------------------
+
 examples/alpine-curl/*.png
-examples/alpine-curl/node_modules/
-examples/alpine-curl/package-lock.json
 examples/dockerfile-playground/playground-image/alpine.tar
+
+# --- Editor / OS junk ------------------------------------------------------
+
+.DS_Store
+*.swp
+*.swo

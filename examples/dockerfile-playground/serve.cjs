@@ -17,8 +17,11 @@ const path = require('path')
 
 const port = parseInt(process.env.PORT || '8080', 10)
 const here = __dirname
-const htdocs = path.join(here, '..', 'alpine-curl', 'htdocs')
-const playgroundWeb = path.join(here, 'web')
+// Both apps live in the shared Vite workspace under ../web/. The c2w runtime's
+// public assets (out.wasm, c2w-webvpn-proxy.wasm, playground.wasm, browser_wasi_shim,
+// etc.) are staged into web/runtime/public by build.sh and end up in dist/ via Vite.
+const htdocs = path.join(here, '..', 'web', 'runtime', 'dist')
+const playgroundWeb = path.join(here, '..', 'web', 'playground', 'dist')
 
 const types = {
     '.html': 'text/html; charset=utf-8',

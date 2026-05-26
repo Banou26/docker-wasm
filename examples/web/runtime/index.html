@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>container + WASI on browser</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #000; height: 100%; width: 100%; overflow: hidden; }
+      #terminal { width: 100vw; height: 100vh; }
+      #terminal canvas { display: block; }
+    </style>
+    <!-- Classic inline script — runs BEFORE the module so the patch is in
+         place when @fkn/lib's RPC iframe (to https://fkn.app/api or local
+         override) is created. COEP=credentialless requires the embedded doc
+         to either CORP-allow or be credentialless; setting el.credentialless
+         + the attribute covers both Chrome / spec accessor paths. -->
+    <script>
+      window.__shimMarker = 'installed-at-parse-time';
+      window.__iframeCreates = [];
+      (function () {
+        var _ce = Document.prototype.createElement;
+        Document.prototype.createElement = function (tag, opts) {
+          var el = _ce.call(this, tag, opts);
+          if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
+            window.__iframeCreates.push({ when: performance.now(), src: el.src });
+            try { el.credentialless = true; } catch (e) {}
+            try { el.setAttribute('credentialless', ''); } catch (e) {}
+          }
+          return el;
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <!-- ws-delegate.js (upstream c2w) is a classic script that defines
+         globalThis.delegate for ?net=delegate mode. Load before the module. -->
+    <script src="/ws-delegate.js"></script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

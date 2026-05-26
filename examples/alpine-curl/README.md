@@ -65,11 +65,11 @@ cd examples/alpine-curl
 FKN_API="http://127.0.0.1:1234/api.html" ./build.sh
 ```
 
-This produces:
-- `htdocs/out.wasm` — the alpine container (≈120 MB)
-- `htdocs/c2w-webvpn-proxy.wasm` — the netstack proxy
-- `htdocs/webvpn-bundle.js` — `@webvpn` + `@fkn/lib` bundled (rewritten to your local fkn/web)
-- the upstream `wasi-browser` frontend + our overlay (patched `index.html`, `stack.js`, `worker.js` + `webvpn-stack-worker.js`)
+This produces (in `examples/web/runtime/dist/`):
+- `out.wasm` — the alpine container (≈120 MB)
+- `c2w-webvpn-proxy.wasm` — the netstack proxy
+- `assets/index.js` — the Vite-bundled main thread (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
+- the upstream c2w `wasi-browser` worker scripts (`worker.js`, `stack-worker.js`, `browser_wasi_shim/`, `wasi-util.js`, `worker-util.js`, `ws-delegate.js`) + our `webvpn-stack-worker.js` + `webvpn-imports.js`
 
 ### 3. Serve cross-origin-isolated
 
@@ -100,18 +100,20 @@ node drive.cjs    # boots alpine, runs the curl, asserts CURL_EXIT=0
 
 ## What was modified vs upstream
 
-The overlay (`overlay/`) carries our changes to upstream c2w's wasi-browser
-frontend so `build.sh` is hands-off:
+Our runtime lives in the shared Vite TS workspace at `examples/web/runtime/`.
+`build.sh` stages the upstream c2w files into `web/runtime/public/`, then
+`vite build` produces `dist/` from our `src/`:
 
-| file                       | change                                                                |
-| -------------------------- | --------------------------------------------------------------------- |
-| `index.html`               | iframe-credentialless shim, `?net=webvpn` mode, expose `window.xterm` |
-| `worker.js`                | `?net=webvpn` branch — no SSL cert dance, no `*_proxy` env            |
-| `stack.js`                 | first-refusal `webvpn.handle()` in the message handler                |
-| `webvpn-stack-worker.js`   | new — runs `c2w-webvpn-proxy.wasm` with `webvpnEnvImports`            |
-| `webvpn-entry.js`          | new — esbuild entry that exposes `@webvpn` + helpers as globals       |
-| `esbuild-build.mjs`/shim   | new — bundles the @webvpn deps with node-builtin polyfills            |
-| `package.json`             | new — npm deps for the bundle                                         |
+| location                         | role                                                                  |
+| -------------------------------- | --------------------------------------------------------------------- |
+| `web/runtime/index.html`         | iframe-credentialless shim, `<script type=module>` entry              |
+| `web/runtime/src/main.ts`        | ghostty-web init, xterm-pty + TtyServer, worker wiring                |
+| `web/runtime/src/stack.ts`       | SAB-bridged message handler — first-refusal `webvpn.handle()`         |
+| `web/runtime/src/webvpn-netstack.ts` | `@webvpn` TCP/UDP socket pool + per-image cache + DoH DNS         |
+| `web/runtime/src/registry.ts`    | in-browser OCI Registry V2 client + docker-archive tar assembler      |
+| `web/runtime/public/worker.js`   | upstream c2w WASI worker, patched `?net=webvpn` branch (no cert dance)|
+| `web/runtime/public/webvpn-stack-worker.js` | classic worker running `c2w-webvpn-proxy.wasm`             |
+| `js/webvpn-imports.js`           | unchanged — `importScripts()`'d into the stack worker                 |
 
 ## Known sharp edges
 
