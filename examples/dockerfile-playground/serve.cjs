@@ -143,8 +143,14 @@ http.createServer((req, res) => {
         return handleProxy(req, res)
     }
 
+    // /playground -> 301 to /playground/ so the HTML's relative script/CSS
+    // references (`app.js`, `style.css`) resolve under /playground/.
+    if (p === '/playground') {
+        res.writeHead(301, { Location: '/playground/' + (u.search || '') + (u.hash || '') })
+        return res.end()
+    }
     // /playground/* -> the drop UI + playground.wasm
-    if (p === '/playground' || p === '/playground/' || p.startsWith('/playground/')) {
+    if (p === '/playground/' || p.startsWith('/playground/')) {
         let rel = p.replace(/^\/playground\/?/, '') || 'index.html'
         const full = path.normalize(path.join(playgroundWeb, rel))
         if (!full.startsWith(playgroundWeb)) { res.writeHead(403); return res.end() }
