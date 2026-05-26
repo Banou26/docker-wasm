@@ -38,15 +38,24 @@ Same setup as `examples/alpine-curl/`:
 
 ## Build the playground wasm (one-time, ≈ 5 min)
 
+The image bakes a `docker save`d alpine:3.19 tar so `FROM alpine:*` works
+offline — Bochs + nested @webvpn TCP can't reliably reach Docker Hub within
+buildah's 30-s deadline.
+
 ```sh
 cd examples/dockerfile-playground/playground-image
+docker pull alpine:3.19
+docker save alpine:3.19 -o alpine.tar
 docker build -t c2w-playground-builder .
-c2w c2w-playground-builder ../web/playground.wasm
+c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder ../web/playground.wasm
 ```
 
-`playground.wasm` is the only thing that ships per-deployment. It's ~150 MB
-(alpine + buildah + busybox + a bochs emulator + a Linux kernel). The user
-downloads it once; their Dockerfiles cost zero on the build side.
+`VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a
+subprocess that OOMs at the default 128 MB.
+
+`playground.wasm` is the only thing that ships per-deployment (≈ 162 MB,
+alpine + buildah + cdrkit + the docker-archive + Bochs + a Linux kernel). The
+user downloads it once; their Dockerfiles cost zero on the build side.
 
 ## Run
 
