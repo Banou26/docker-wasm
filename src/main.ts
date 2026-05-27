@@ -1,5 +1,4 @@
-// Runtime entry. Replaces the inline <script> + script-tag soup from the
-// legacy htdocs/index.html.
+// Runtime entry. The page's <script type="module"> from index.html.
 //
 // Bootstraps:
 //   1. credentialless-iframes shim (so the @fkn/lib RPC iframe under our COEP
@@ -24,7 +23,7 @@ import {
 import { newStack, type Netstack } from './stack'
 import { createWebvpnNetstack, type ImageCache } from './webvpn-netstack'
 import { pullImage, dockerfileFromRefs } from './registry'
-import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, type NetMode } from '@c2w-webvpn/shared'
+import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, type NetMode } from './shared'
 
 // Loaded into globals by /ws-delegate.js (kept as a static asset under public/).
 declare const delegate: (worker: Worker, image: string, address: string) => (msg: MessageEvent) => void

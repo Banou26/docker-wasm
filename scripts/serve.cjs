@@ -1,11 +1,11 @@
-// Static server for the in-browser dockerfile playground.
+// Static server for the docker-wasm runtime + playground.
 //
-// Serves:
-//   /playground/         drop UI (web/index.html)
-//   /playground/playground.wasm   the c2w-built alpine+buildah image (one-time, ~150 MB)
-//   /                    alpine-curl runtime (htdocs/) — buildah builds the user's
-//                        Dockerfile inside this guest; the user's Dockerfile is
-//                        passed via #dockerfile=<base64> in the URL hash.
+// Serves the Vite build output:
+//   /                            runtime (build/index.html)
+//   /playground/                 drop UI (build/playground/index.html)
+//   /playground/playground.wasm  the c2w-built alpine+buildah image (one-time, ~150 MB)
+//   /proxy                       fkn-proxy-compatible CORS shim for in-browser
+//                                Docker Hub pulls
 //
 // COOP same-origin + COEP credentialless throughout, so SharedArrayBuffer works
 // for the wasi-on-browser worker bridge and the @fkn/lib RPC iframe loads.
@@ -17,15 +17,12 @@ const path = require('path')
 
 const port = parseInt(process.env.PORT || '8080', 10)
 const here = __dirname
-// Both apps live in the shared Vite workspace under ../web/. The c2w runtime's
-// public assets (out.wasm, c2w-webvpn-proxy.wasm, playground.wasm, browser_wasi_shim,
-// etc.) are staged into web/runtime/public by build.sh and end up in dist/ via Vite.
-const htdocs = path.join(here, '..', 'web', 'runtime', 'dist')
-const playgroundWeb = path.join(here, '..', 'web', 'playground', 'dist')
+const root = path.join(here, '..', 'build')
 
 const types = {
     '.html': 'text/html; charset=utf-8',
     '.js':   'application/javascript; charset=utf-8',
+    '.cjs':  'application/javascript; charset=utf-8',
     '.mjs':  'application/javascript; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.wasm': 'application/wasm',
@@ -35,6 +32,8 @@ const types = {
 }
 const coiHeaders = {
     'Cross-Origin-Opener-Policy': 'same-origin',
+    // credentialless allows cross-origin iframes (e.g., @fkn/lib's
+    // https://fkn.app/api bridge) while still giving SharedArrayBuffer.
     'Cross-Origin-Embedder-Policy': 'credentialless',
     'Cross-Origin-Resource-Policy': 'cross-origin',
     'Cache-Control': 'no-store',
@@ -70,9 +69,6 @@ async function handleProxy(req, res) {
         if (!hostname) { res.writeHead(400); return res.end('missing fkn-proxy-hostname') }
         const target = protocol + '://' + hostname + pathname + search
 
-        // Reconstruct upstream headers from the b64 JSON envelope. The JSON
-        // shape comes from serverProxyFetch passing init.headers through
-        // JSON.stringify(...) — handle both record and tuple-array forms.
         let upstreamHeaders = {}
         const hdrB64 = req.headers['fkn-proxy-headers']
         if (hdrB64) {
@@ -97,18 +93,10 @@ async function handleProxy(req, res) {
             method: req.method,
             headers: upstreamHeaders,
             body,
-            // Follow registry redirects (Docker Hub 307s blob fetches to a CDN).
-            // Spec-compliant clients strip Authorization on cross-origin
-            // redirects automatically, which matches the registry expectation
-            // that CDN URLs are pre-signed.
             redirect: 'follow',
         })
         const respHeadersObj = {}
         up.headers.forEach((v, k) => { respHeadersObj[k] = v })
-        // @fkn/lib's serverProxyFetch loses Response.status when it rebuilds the
-        // Response on the client side (`new Response(body, {...response, headers}`
-        // doesn't copy status). Smuggle the real status through the headers
-        // payload so the client can read it back via headers.get('x-upstream-status').
         respHeadersObj['x-upstream-status'] = String(up.status)
         const buf = Buffer.from(await up.arrayBuffer())
         res.writeHead(up.status, {
@@ -130,7 +118,6 @@ http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x')
     const p = u.pathname
 
-    // CORS preflight for /proxy (cross-origin fkn/web iframe will preflight)
     if (req.method === 'OPTIONS' && p === '/proxy') {
         res.writeHead(204, {
             ...coiHeaders,
@@ -147,26 +134,19 @@ http.createServer((req, res) => {
     }
 
     // /playground -> 301 to /playground/ so the HTML's relative script/CSS
-    // references (`app.js`, `style.css`) resolve under /playground/.
+    // references resolve under /playground/.
     if (p === '/playground') {
         res.writeHead(301, { Location: '/playground/' + (u.search || '') + (u.hash || '') })
         return res.end()
     }
-    // /playground/* -> the drop UI + playground.wasm
-    if (p === '/playground/' || p.startsWith('/playground/')) {
-        let rel = p.replace(/^\/playground\/?/, '') || 'index.html'
-        const full = path.normalize(path.join(playgroundWeb, rel))
-        if (!full.startsWith(playgroundWeb)) { res.writeHead(403); return res.end() }
-        return serveFile(res, full)
-    }
 
-    // / -> alpine-curl runtime
     let rel = p.replace(/^\//, '') || 'index.html'
-    const full = path.normalize(path.join(htdocs, rel))
-    if (!full.startsWith(htdocs)) { res.writeHead(403); return res.end() }
+    if (rel.endsWith('/')) rel += 'index.html'
+    const full = path.normalize(path.join(root, rel))
+    if (!full.startsWith(root)) { res.writeHead(403); return res.end() }
     return serveFile(res, full)
 }).listen(port, '127.0.0.1', () => {
-    console.log('dockerfile-playground (static):')
+    console.log('docker-wasm (static + /proxy shim):')
+    console.log('  runtime : http://127.0.0.1:' + port + '/?net=webvpn')
     console.log('  drop UI : http://127.0.0.1:' + port + '/playground/')
-    console.log('  runtime : http://127.0.0.1:' + port + '/?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>')
 })

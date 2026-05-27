@@ -2,7 +2,7 @@
 // pointed at the prebuilt playground.wasm. No server-side build, no job ids —
 // "playground" is one static wasm.
 
-import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from '@c2w-webvpn/shared'
+import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from './shared'
 
 const dropZone = document.getElementById('drop-zone')!
 const pasteBox = document.getElementById('paste-box') as HTMLTextAreaElement

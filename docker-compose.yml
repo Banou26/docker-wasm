@@ -1,0 +1,7 @@
+version: '3'
+
+services:
+  docker-wasm:
+    build: .
+    volumes:
+      - "./:/build"
