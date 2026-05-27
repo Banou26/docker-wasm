@@ -40,42 +40,47 @@ real browser-side TCP/UDP egress, which is exactly the missing hop.
 ```
 
 The only thing this project changes vs. stock container2wasm is the forwarder's
-**dial**: `net.Dial` → `dialWebvpn` (see `proxy/webvpn.go`). Everything else
+**dial**: `net.Dial` → `dialWebvpn` (see `src/proxy/webvpn.go`). Everything else
 (emulation, QEMU framing, DHCP, ARP, the gVisor TCP/IP termination) is reused
 unchanged.
 
 ### The egress seam
 
-* `proxy/netstack/` — assembles the gVisor stack from gvisor-tap-vsock's exported
-  pieces (`tap.NewLinkEndpoint/NewSwitch/NewIPPool`, `dhcp.New`) and installs
-  TCP + UDP forwarders that dial via an injected `DialFunc`. A small DNS
-  forwarder on the gateway relays the guest's `:53` queries out over UDP (the
-  guest's resolver is pointed at the gateway by DHCP). The dial is a parameter,
-  not a hard dependency — the wasm build injects `@webvpn`, the test injects
-  `net.Dial`.
-* `proxy/main.go` — the thin wasip1 entrypoint: wires the `@webvpn` dialer into
-  the netstack, finds the emulator socket among the WASI preopens, and serves.
-* `proxy/webvpn.go` — a `net.Conn` backed by a JS-side `@webvpn` socket, plus the
-  4-function wasmimport ABI (`webvpn_connect/send/recv/close`). Non-blocking on
-  the JS side; Go-side blocking is synthesised by polling + `time.Sleep`, which
-  yields to the scheduler while the main thread fills buffers — the same
-  poll-driven, zero-Asyncify model libtorrent's `library_fkn.js` uses.
-* `js/webvpn-imports.js` — **worker side.** Implements the wasmimports as
+* `src/proxy/netstack/` — assembles the gVisor stack from gvisor-tap-vsock's
+  exported pieces (`tap.NewLinkEndpoint/NewSwitch/NewIPPool`, `dhcp.New`) and
+  installs TCP + UDP forwarders that dial via an injected `DialFunc`. A small
+  DNS forwarder on the gateway relays the guest's `:53` queries out over UDP
+  (the guest's resolver is pointed at the gateway by DHCP). The dial is a
+  parameter, not a hard dependency — the wasm build injects `@webvpn`, the
+  test injects `net.Dial`.
+* `src/proxy/main.go` — the thin wasip1 entrypoint: wires the `@webvpn` dialer
+  into the netstack, finds the emulator socket among the WASI preopens, and
+  serves.
+* `src/proxy/webvpn.go` — a `net.Conn` backed by a JS-side `@webvpn` socket,
+  plus the 4-function wasmimport ABI (`webvpn_connect/send/recv/close`).
+  Non-blocking on the JS side; Go-side blocking is synthesised by polling +
+  `time.Sleep`, which yields to the scheduler while the main thread fills
+  buffers — the same poll-driven, zero-Asyncify model libtorrent's
+  `library_fkn.js` uses.
+* `public/webvpn-imports.js` — **worker side.** Implements the wasmimports as
   blocking round-trips to the main thread over the existing SharedArrayBuffer
   stream protocol (identical mechanism to upstream's `http_send`). This stays
   plain JS because it's `importScripts()`'d into the c2w stack worker.
-* `examples/web/runtime/src/webvpn-netstack.ts` — **main-thread side.** Owns
-  the `@webvpn` sockets and per-socket ring buffers, serviced on each worker
-  round-trip. Ports the copy-on-receive discipline from `library_fkn.js`.
+* `src/webvpn-netstack.ts` — **main-thread side.** Owns the `@webvpn` sockets
+  and per-socket ring buffers, serviced on each worker round-trip. Ports the
+  copy-on-receive discipline from `library_fkn.js`.
 
 ## Build
 
 ```sh
-cd proxy
-GOOS=wasip1 GOARCH=wasm go build -o c2w-webvpn-proxy.wasm .
+make
+# or, hermetically:
+npm run make-docker
 ```
 
-(Go ≥ 1.23. The `.wasm` is gitignored — build it locally.)
+Either produces `dist/c2w-webvpn-proxy.wasm` (Go ≥ 1.23 required for direct
+`make`; `make-docker` uses a pinned toolchain via Docker). The `.wasm` is
+gitignored — build it locally.
 
 ## Wiring into container2wasm's frontend
 
@@ -84,8 +89,8 @@ container2wasm's [`examples/wasi-browser`](https://github.com/ktock/container2wa
 (or `examples/emscripten` for the QEMU/emscripten variant) and make three edits:
 
 1. **Serve the files.** Put `c2w-webvpn-proxy.wasm` next to your other static
-   assets and copy `js/webvpn-imports.js` there too (the in-repo runtime keeps
-   the main-thread side in `examples/web/runtime/src/webvpn-netstack.ts`).
+   assets and copy `public/webvpn-imports.js` there too (the in-repo runtime
+   keeps the main-thread side in `src/webvpn-netstack.ts`).
    Point the stack worker at our proxy
    (`stackImageName = "c2w-webvpn-proxy.wasm"`).
 
@@ -124,21 +129,21 @@ for `SharedArrayBuffer` — the same requirement container2wasm already has.
 
 ## Example: alpine + curl
 
-`examples/alpine-curl/` is a turnkey build of a browser-runnable Alpine
-container (with `curl` + DNS tools) wired to this netstack:
+`examples/alpine-curl/Dockerfile` is the demo image (alpine + curl + bind-tools).
+Build it, convert it to wasm, build the proxy, and bundle the runtime with:
 
 ```sh
-cd examples/alpine-curl && ./build.sh    # needs Docker w/ network + c2w + Go
+./scripts/build-image.sh    # needs Docker w/ network + c2w + Go
 ```
 
-It builds the image, converts it with `c2w`, builds the proxy, and assembles
-`htdocs/`. Note: `c2w` clones/compiles the emulator and runs `apk add` **inside
-build containers**, so it needs an environment where Docker build containers
-have outbound network — it will not run in a network-restricted sandbox.
+It produces `build/` (Vite output). Note: `c2w` clones/compiles the emulator
+and runs `apk add` **inside build containers**, so it needs an environment
+where Docker build containers have outbound network — it will not run in a
+network-restricted sandbox.
 
 ## Tests
 
-`proxy/netstack/e2e_test.go` is a hermetic end-to-end test of the data path. It
+`src/proxy/netstack/e2e_test.go` is a hermetic end-to-end test of the data path. It
 can't drive the real emulator or `@webvpn`, so it substitutes the two ends with
 production-equivalent interfaces:
 
@@ -153,7 +158,7 @@ destination in the forwarder, (c) dials out via the seam, and (d) round-trips
 bytes both ways.
 
 ```sh
-cd proxy && go test ./netstack/ -v
+cd src/proxy && go test ./netstack/ -v
 # PASS: TestTCPForwardThroughProxy, TestUDPForwardThroughProxy
 ```
 

@@ -61,11 +61,10 @@ npx vite --port 1234 --host 127.0.0.1 &
 ### 2. Build the container + bundle
 
 ```sh
-cd examples/alpine-curl
-FKN_API="http://127.0.0.1:1234/api.html" ./build.sh
+FKN_API="http://127.0.0.1:1234/api.html" ./scripts/build-image.sh
 ```
 
-This produces (in `examples/web/runtime/dist/`):
+This produces (in `build/`):
 - `out.wasm` — the alpine container (≈120 MB)
 - `c2w-webvpn-proxy.wasm` — the netstack proxy
 - `assets/index.js` — the Vite-bundled main thread (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
@@ -74,7 +73,7 @@ This produces (in `examples/web/runtime/dist/`):
 ### 3. Serve cross-origin-isolated
 
 ```sh
-node serve.cjs   # localhost:8080 with COOP=same-origin, COEP=credentialless
+node scripts/serve.cjs   # localhost:8080 with COOP=same-origin, COEP=credentialless
 ```
 
 `COEP: credentialless` (rather than `require-corp`) is required so the
@@ -95,25 +94,25 @@ curl -ksS https://1.1.1.1/
 
 Headless (puppeteer):
 ```sh
-node drive.cjs    # boots alpine, runs the curl, asserts CURL_EXIT=0
+node scripts/drive.cjs    # boots alpine, runs the curl, asserts CURL_EXIT=0
 ```
 
 ## What was modified vs upstream
 
-Our runtime lives in the shared Vite TS workspace at `examples/web/runtime/`.
-`build.sh` stages the upstream c2w files into `web/runtime/public/`, then
-`vite build` produces `dist/` from our `src/`:
+Our runtime is a single Vite TS package at the repo root. `scripts/build-image.sh`
+stages upstream c2w files into `public/`, then `vite build` produces `build/`
+from `src/`:
 
 | location                         | role                                                                  |
 | -------------------------------- | --------------------------------------------------------------------- |
-| `web/runtime/index.html`         | iframe-credentialless shim, `<script type=module>` entry              |
-| `web/runtime/src/main.ts`        | ghostty-web init, xterm-pty + TtyServer, worker wiring                |
-| `web/runtime/src/stack.ts`       | SAB-bridged message handler — first-refusal `webvpn.handle()`         |
-| `web/runtime/src/webvpn-netstack.ts` | `@webvpn` TCP/UDP socket pool + per-image cache + DoH DNS         |
-| `web/runtime/src/registry.ts`    | in-browser OCI Registry V2 client + docker-archive tar assembler      |
-| `web/runtime/public/worker.js`   | upstream c2w WASI worker, patched `?net=webvpn` branch (no cert dance)|
-| `web/runtime/public/webvpn-stack-worker.js` | classic worker running `c2w-webvpn-proxy.wasm`             |
-| `js/webvpn-imports.js`           | unchanged — `importScripts()`'d into the stack worker                 |
+| `index.html`                     | iframe-credentialless shim, `<script type=module>` entry              |
+| `src/main.ts`                    | ghostty-web init, xterm-pty + TtyServer, worker wiring                |
+| `src/stack.ts`                   | SAB-bridged message handler — first-refusal `webvpn.handle()`         |
+| `src/webvpn-netstack.ts`         | `@webvpn` TCP/UDP socket pool + per-image cache + DoH DNS             |
+| `src/registry.ts`                | in-browser OCI Registry V2 client + docker-archive tar assembler      |
+| `public/worker.js`               | upstream c2w WASI worker, patched `?net=webvpn` branch (no cert dance)|
+| `public/webvpn-stack-worker.js`  | classic worker running `c2w-webvpn-proxy.wasm`                        |
+| `public/webvpn-imports.js`       | `importScripts()`'d into the stack worker                             |
 
 ## Known sharp edges
 

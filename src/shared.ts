@@ -1,6 +1,6 @@
 // Cross-app contracts between the dockerfile-playground drop UI and the
-// alpine-curl c2w runtime. Both apps live in this workspace and share these
-// types via the @c2w-webvpn/shared package.
+// alpine-curl c2w runtime. Both Vite entries import these constants from
+// ./shared so the playground and runtime stay in lockstep.
 
 // URL hash payload the playground produces and the runtime consumes.
 // The runtime page resolves `#dockerfile=<base64-utf8>` and pulls each FROM

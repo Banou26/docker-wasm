@@ -39,21 +39,20 @@ pass-through, structurally identical to running fkn/proxy locally).
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
 - For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
   (vite dev) running locally; see `../alpine-curl/README.md`.
-- The alpine-curl runtime must be built first — run `examples/alpine-curl/build.sh`
-  once. It populates `examples/web/runtime/public/` with `out.wasm`,
-  `c2w-webvpn-proxy.wasm`, the upstream c2w worker assets, then runs the Vite
-  build into `examples/web/runtime/dist/`.
+- The alpine-curl runtime must be built first — run `scripts/build-image.sh`
+  once. It populates `public/` with `out.wasm`, `c2w-webvpn-proxy.wasm`, the
+  upstream c2w worker assets, then runs the Vite build into `build/`.
 
 ## Build the playground wasm (one-time, ≈ 5 min)
 
 ```sh
-cd examples/dockerfile-playground/playground-image
+cd examples/dockerfile-playground
 docker build -t c2w-playground-builder .
 c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder \
-    ../../web/playground/public/playground.wasm
+    ../../public/playground/playground.wasm
 
-# Re-stage into the served dist/ (Vite copies public/ -> dist/ on build):
-( cd ../../web && npm run build:playground )
+# Re-stage into the served build/ (Vite copies public/ -> build/ on build):
+( cd ../.. && npm run build )
 ```
 
 `VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a
@@ -75,8 +74,7 @@ cd ~/dev/fkn/web && \
     npx vite --port 1234 --host 127.0.0.1 &
 
 # the playground itself:
-cd examples/dockerfile-playground
-node serve.cjs    # static + /proxy (fkn-proxy-compatible CORS shim), COOP/COEP, port 8080
+node scripts/serve.cjs    # static + /proxy (fkn-proxy-compatible CORS shim), COOP/COEP, port 8080
 ```
 
 Open <http://127.0.0.1:8080/playground/>. Drop or paste a Dockerfile. Click

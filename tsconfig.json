@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "outDir": "build",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
@@ -8,7 +9,6 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": false,
     "useDefineForClassFields": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
@@ -16,6 +16,9 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "verbatimModuleSyntax": true
-  }
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts", "vite.config.ts"]
 }

@@ -1,5 +1,7 @@
 /// <reference types="node" />
 import { defineConfig } from 'vite'
+import { createReadStream, statSync } from 'node:fs'
+import { extname, join } from 'node:path'
 
 // COOP/COEP for SharedArrayBuffer + cross-origin iframe (the @fkn/lib RPC iframe
 // loads from a different origin and relies on credentialless embedding).
@@ -21,13 +23,16 @@ export default defineConfig({
   base: './',
   build: {
     target: 'es2022',
-    outDir: 'dist',
+    outDir: 'build',
     emptyOutDir: true,
     sourcemap: false,
     assetsInlineLimit: 0,
     rollupOptions: {
+      input: {
+        main: 'index.html',
+        playground: 'playground/index.html',
+      },
       output: {
-        // Predictable filenames so we can deep-link them from worker-side code.
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
@@ -55,4 +60,28 @@ export default defineConfig({
   preview: {
     headers: coiHeaders,
   },
+  plugins: [
+    {
+      // Serve dist/* raw during dev (the Go-wasm artifact lands there before
+      // make's copy step propagates it into public/). Mirrors libav-wasm.
+      name: 'serve-dist-raw',
+      configureServer: (server) => {
+        server.middlewares.use('/dist', (req, res, next) => {
+          const filePath = join(process.cwd(), 'dist', (req.url || '/').split('?')[0] || '/')
+          try {
+            const stat = statSync(filePath)
+            if (!stat.isFile()) return next()
+            const ext = extname(filePath)
+            const type = ext === '.wasm' ? 'application/wasm'
+              : ext === '.js' ? 'text/javascript'
+              : 'application/octet-stream'
+            res.setHeader('Content-Type', type)
+            res.setHeader('Content-Length', String(stat.size))
+            res.setHeader('Cache-Control', 'public, max-age=300')
+            createReadStream(filePath).pipe(res)
+          } catch { next() }
+        })
+      },
+    },
+  ],
 })

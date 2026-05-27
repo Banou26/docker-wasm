@@ -5,18 +5,18 @@
 
 # JS/TS toolchains (Vite, Rollup, TypeScript, esbuild).
 node_modules/
+build/
 dist/
 .vite/
 *.tsbuildinfo
 
-# Emscripten cache (bindings/wasm builds), wasm-pack output.
-.em_cache/
-bindings/wasm/build/
+# Upstream c2w sources cloned into public/ during build-image.sh.
+public/_c2w_src/
 
 # --- example-specific -----------------------------------------------------
 
 examples/alpine-curl/*.png
-examples/dockerfile-playground/playground-image/alpine.tar
+examples/dockerfile-playground/alpine.tar
 
 # --- Editor / OS junk ------------------------------------------------------
 

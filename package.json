@@ -1,0 +1,39 @@
+{
+  "name": "docker-wasm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev-wasm-cmd\" \"npm run dev-web\"",
+    "dev-wasm-cmd": "nodemon -e go --watch src/proxy --exec \"npm run make-docker\"",
+    "dev-wasm": "concurrently \"nodemon -e go --watch src/proxy --exec \\\"npm run make-docker\\\"\"",
+    "make-docker": "docker compose run --rm docker-wasm make",
+    "dev-web": "vite --port 1234",
+    "vite-build": "vite build",
+    "vite-build-dev": "vite build --watch",
+    "build": "npm run make-docker && vite build && npm run copy-wasm",
+    "typecheck": "tsc --noEmit",
+    "copy-wasm": "copyfiles -u 1 dist/*.wasm public/ && copyfiles -u 1 dist/*.wasm build/",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "copyfiles": "^2.4.1",
+    "nodemon": "^3.1.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "@fkn/lib": "^0.3.7",
+    "@webvpn/dgram": "^0.3.7",
+    "@webvpn/net": "^0.3.7",
+    "buffer": "^6.0.3",
+    "events": "^3.3.0",
+    "ghostty-web": "^0.4.0",
+    "process": "^0.11.10",
+    "stream-browserify": "^3.0.0",
+    "util": "^0.12.5",
+    "xterm-pty": "0.9.4"
+  }
+}
