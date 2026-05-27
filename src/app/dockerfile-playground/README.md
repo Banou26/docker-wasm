@@ -46,13 +46,13 @@ pass-through, structurally identical to running fkn/proxy locally).
 ## Build the playground wasm (one-time, ≈ 5 min)
 
 ```sh
-cd examples/dockerfile-playground
+cd src/app/dockerfile-playground
 docker build -t c2w-playground-builder .
 c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder \
-    ../../public/playground/playground.wasm
+    ../../../public/playground/playground.wasm
 
 # Re-stage into the served build/ (Vite copies public/ -> build/ on build):
-( cd ../.. && npm run build )
+( cd ../../.. && npm run build )
 ```
 
 `VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a

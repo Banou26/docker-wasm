@@ -20,7 +20,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
-imagedir="$repo/examples/alpine-curl"
+imagedir="$repo/src/app/alpine-curl"
 public="$repo/public"
 out="$repo/build"
 mkdir -p "$public"
