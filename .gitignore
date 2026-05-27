@@ -13,10 +13,10 @@ dist/
 # Upstream c2w sources cloned into public/ during build-image.sh.
 public/_c2w_src/
 
-# --- example-specific -----------------------------------------------------
+# --- app-specific ----------------------------------------------------------
 
-examples/alpine-curl/*.png
-examples/dockerfile-playground/alpine.tar
+src/app/alpine-curl/*.png
+src/app/dockerfile-playground/alpine.tar
 
 # --- Editor / OS junk ------------------------------------------------------
 

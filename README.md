@@ -129,7 +129,7 @@ for `SharedArrayBuffer` — the same requirement container2wasm already has.
 
 ## Example: alpine + curl
 
-`examples/alpine-curl/Dockerfile` is the demo image (alpine + curl + bind-tools).
+`src/app/alpine-curl/Dockerfile` is the demo image (alpine + curl + bind-tools).
 Build it, convert it to wasm, build the proxy, and bundle the runtime with:
 
 ```sh
