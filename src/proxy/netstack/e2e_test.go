@@ -1,9 +1,9 @@
-// e2e_test.go — hermetic end-to-end test of the netstack data path.
+// e2e_test.go - hermetic end-to-end test of the netstack data path.
 //
 // It can't use the real container2wasm emulator (that needs the c2w build
 // toolchain) or @webvpn (browser-only), so it substitutes:
 //   - the guest: a second gVisor stack with an ethernet link endpoint, wired to
-//     the proxy over a loopback TCP connection carrying QEMU-protocol frames —
+//     the proxy over a loopback TCP connection carrying QEMU-protocol frames -
 //     exactly the framing the real emulator emits.
 //   - @webvpn egress: net.Dial to local echo servers.
 //

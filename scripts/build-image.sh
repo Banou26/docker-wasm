@@ -7,7 +7,7 @@
 #   - c2w on PATH (build from github.com/container2wasm/container2wasm)
 #   - node + npm
 #
-# Output: ./build/ (vite output) — serve cross-origin-isolated via scripts/serve.cjs.
+# Output: ./build/ (vite output) - serve cross-origin-isolated via scripts/serve.cjs.
 #
 # Env vars:
 #   FKN_API   override the @fkn/lib iframe URL baked into the bundle.
@@ -45,7 +45,7 @@ for f in browser_wasi_shim stack-worker.js wasi-util.js worker-util.js ws-delega
         cp "$src/examples/wasi-browser/htdocs/$f" "$public/"
     fi
 done
-# c2w-net-proxy.wasm (the "browser" netstack mode — playground uses webvpn,
+# c2w-net-proxy.wasm (the "browser" netstack mode - playground uses webvpn,
 # but we keep it for completeness).
 if [ -f "$src/examples/wasi-browser/htdocs/c2w-net-proxy.wasm" ]; then
     cp "$src/examples/wasi-browser/htdocs/c2w-net-proxy.wasm" "$public/"
@@ -60,7 +60,7 @@ if [ -n "${FKN_API:-}" ]; then
     echo "==> 5b   rewrite the @fkn/lib origin to: $FKN_API"
     origin="${FKN_API%/*}"        # strip trailing /api.html or /api
     path="/${FKN_API##*/}"
-    # Vite emits hashed assets — rewrite every .js under build/assets/. The bundled
+    # Vite emits hashed assets - rewrite every .js under build/assets/. The bundled
     # iframe URL is a template literal `${<minified>}/api` where the minified
     # variable name is whatever Rollup chose this build (`_4` in esbuild, `JC`
     # or similar in Rollup). Match any identifier.

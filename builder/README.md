@@ -1,13 +1,13 @@
 # In-browser Dockerfile → wasm builder
 
 Goal: paste a Dockerfile, build it **entirely in the browser**, and get a
-runnable wasm — no server-side build.
+runnable wasm; no server-side build.
 
 ## The key insight
 
 `docker build` doesn't *transform* a Dockerfile, it *executes* it: every `RUN`
 runs arch-specific Linux binaries (`sh`, `apk`, `gcc`). You can't interpret
-those into wasm — you can only run them. So building a Linux image in the
+those into wasm; you can only run them. So building a Linux image in the
 browser requires running Linux in the browser, which is exactly the emulator
 container2wasm already ships. The recursion closes:
 
@@ -24,10 +24,10 @@ run-time:    emulator(wasm) ─► Linux guest ─► the built container
 
 You don't write a new "Dockerfile compiler." The build system **is the same
 emulator** running a builder guest (this directory) whose job is to run buildah
-and package the result. The emulator wasm is fixed and prebuilt — only the
+and package the result. The emulator wasm is fixed and prebuilt; only the
 rootfs differs per build.
 
-## Phase 1 — VALIDATED ✅
+## Phase 1 - VALIDATED ✅
 
 The make-or-break unknown was: can a rootless, daemonless OCI builder run under
 the constraints of the emulated guest (no Docker daemon, no privileged kernel
@@ -48,19 +48,19 @@ $ buildah ... push localhost/alpine-curl-test oci-archive:/out/image.tar
 ```
 
 So: base-image pull, `RUN` execution, network-dependent `RUN`, commit, and
-rootfs export all work daemonless/rootless with no privileged features — the
+rootfs export all work daemonless/rootless with no privileged features, the
 exact shape of the emulated guest. The only hops that needed help were the
 **network egress** ones (the registry pull's TLS and `apk`'s fetch), which is
 precisely what `@webvpn` provides in the browser; in this sandbox they were
 worked around with a rate-limit-free mirror and http repos.
 
-`Dockerfile` + `build-image.sh` here capture that exact, validated invocation —
+`Dockerfile` + `build-image.sh` here capture that exact, validated invocation;
 they are what gets c2w-converted into the in-browser builder guest.
 
-## Phase 2 — builder-guest networking — VALIDATED ✅
+## Phase 2: builder-guest networking - VALIDATED ✅
 
 The builder guest is just another c2w guest, so its egress is this repo's
-netstack. The dependency that registry pulls hinge on — **DNS** — is now covered
+netstack. The dependency that registry pulls hinge on, **DNS**, is now covered
 by a hermetic test (`proxy/netstack` `TestDNSForwardThroughProxy`): a guest query
 to `gateway:53` is relayed out via the dial seam and answered. Together with the
 TCP/UDP forwarder tests, that's the full set a `buildah` pull needs (resolve →
@@ -68,7 +68,7 @@ TCP). In the browser the dial seam is `@webvpn`, so pulls + `RUN apt/apk` work
 with no CA/mirror hacks. (End-to-end-in-browser still pending the browser harness
 + a live @webvpn.)
 
-## Phase 3 — package rootfs → runnable disk — VALIDATED ✅
+## Phase 3: package rootfs → runnable disk - VALIDATED ✅
 
 `package-rootfs.sh` turns the built OCI image into `rootfs.bin`, the Rock-Ridge
 ISO the runtime emulator mounts. The per-build transform was validated on real
@@ -81,15 +81,15 @@ buildah image -> oci layout
   -> mkisofs -R  -> rootfs.bin   (12 MB; container rootfs + /oci tree inside)
 ```
 
-The emulator wasm is **prebuilt and fixed** — only `rootfs.bin` changes per
-build — so no per-build wasm compilation. The one piece not reproducible in this
+The emulator wasm is **prebuilt and fixed** (only `rootfs.bin` changes per
+build), so no per-build wasm compilation. The one piece not reproducible in this
 sandbox is the **fixed VM userland** (built once via c2w; the Docker build that
 produces it needs network, which is blocked here). It would be baked into the
 builder guest at `$VM_ROOTFS`.
 
 ## What's left
 
-* **Phase 4 — chain to a runtime emulator** to run the built container (already
+* **Phase 4: chain to a runtime emulator** to run the built container (already
   the working part of this repo, plus @webvpn).
 * **In-browser glue:** run `build-image.sh` + `package-rootfs.sh` inside the
   builder guest from a browser UI, shuttling the Dockerfile in and `rootfs.bin`
@@ -98,7 +98,7 @@ builder guest at `$VM_ROOTFS`.
 ## Honest risks
 
 * **Performance.** buildah on an emulated CPU with OPFS-backed vfs storage is
-  *slow* — think CI-on-a-potato. The vfs driver copies whole layers (no
+  *slow*; think CI-on-a-potato. The vfs driver copies whole layers (no
   overlay), trading speed for not needing privileged features.
 * **Memory.** Builder guest RAM + image layers + OPFS, all in one tab. Big
   images may exceed the budget.

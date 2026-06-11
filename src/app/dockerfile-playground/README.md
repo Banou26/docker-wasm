@@ -31,7 +31,7 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 
 **Nothing leaves the browser** except the actual Docker Hub HTTPS request,
 routed through @fkn/lib's `serverProxyFetch` chain (which sends an HTTP request
-to the page's own `/proxy` endpoint — a thin, fkn-proxy-compatible CORS
+to the page's own `/proxy` endpoint: a thin, fkn-proxy-compatible CORS
 pass-through, structurally identical to running fkn/proxy locally).
 
 ## Prereqs
@@ -39,7 +39,7 @@ pass-through, structurally identical to running fkn/proxy locally).
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
 - For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
   (vite dev) running locally; see `../alpine-curl/README.md`.
-- The alpine-curl runtime must be built first — run `scripts/build-image.sh`
+- The alpine-curl runtime must be built first; run `scripts/build-image.sh`
   once. It populates `public/` with `out.wasm`, `c2w-webvpn-proxy.wasm`, the
   upstream c2w worker assets, then runs the Vite build into `build/`.
 
@@ -55,7 +55,7 @@ c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder \
 ( cd ../../.. && npm run build )
 ```
 
-`VM_MEMORY_SIZE_MB=512` is required — buildah's chroot-isolation RUN spawns a
+`VM_MEMORY_SIZE_MB=512` is required: buildah's chroot-isolation RUN spawns a
 subprocess that OOMs at the default 128 MB.
 
 `playground.wasm` is the only thing that ships per-deployment (≈ 160 MB:
@@ -92,14 +92,14 @@ runs the user's Dockerfile and drops into `buildah run --tty` on the result.
 * ✅ **No pre-baked images**: any Dockerfile whose FROM resolves to a public
   registry image works.
 * ✅ **DNS via DoH**: gateway:53 queries are POSTed to Cloudflare DoH via
-  serverProxyFetch — buildah's network from inside Bochs never has to wait on
+  serverProxyFetch; buildah's network from inside Bochs never has to wait on
   UDP through @webvpn.
 * ✅ **RUN steps with network**: the @webvpn netstack path still serves
   arbitrary TCP/UDP for `RUN apk add …` etc.
 
 ## Known sharp edges
 
-* Bochs emulation is slow — the build is on the order of minutes for a simple
+* Bochs emulation is slow; the build is on the order of minutes for a simple
   `FROM alpine; CMD …`. Most of the time is spent copying the layer through
   vfs storage; future work: a smarter storage driver or larger guest RAM.
 * The base64 hash payload caps at the URL length the browser allows (a few
@@ -109,7 +109,7 @@ runs the user's Dockerfile and drops into `buildah run --tty` on the result.
 ## Why no backend
 
 Earlier iterations had a Node backend running `docker build` + `c2w` on every
-drop. That defeated the point — the whole reason we built a netstack +
+drop. That defeated the point: the whole reason we built a netstack +
 bridged @webvpn was so build/run can happen client-side. The build server is
 gone; what's left is a static file server + a tiny fkn-proxy-compatible CORS
 shim at `/proxy` so the browser can hit registries that don't send

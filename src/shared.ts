@@ -10,7 +10,7 @@ export const HASH_KEY_DOCKERFILE = 'dockerfile'
 // Search-param contract for the runtime entry. Both apps reference these.
 export const QUERY_PARAMS = {
   // c2w network mode: 'delegate' (WebSocket), 'browser' (c2w-net-proxy.wasm),
-  // 'webvpn' (c2w-webvpn-proxy.wasm — what the playground uses).
+  // 'webvpn' (c2w-webvpn-proxy.wasm - what the playground uses).
   net: 'net',
   // Path to the container wasm. Playground sets this to /playground/playground.wasm.
   wasmUrl: 'wasm-url',

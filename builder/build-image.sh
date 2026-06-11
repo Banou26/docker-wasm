@@ -3,10 +3,10 @@
 # daemonless buildah and exports the result as an OCI image layout.
 #
 # Inputs : the user's build context (incl. Dockerfile) at /work
-# Output : /out/image  — an OCI layout dir, consumed by package-rootfs.sh
+# Output : /out/image  - an OCI layout dir, consumed by package-rootfs.sh
 #
 # Network egress (base-image pull + RUN steps) uses the guest's normal
-# networking, which in the browser is the c2w-webvpn netstack over @webvpn — so
+# networking, which in the browser is the c2w-webvpn netstack over @webvpn - so
 # none of the sandbox-specific egress workarounds in the repo README are needed.
 set -eu
 
@@ -21,4 +21,4 @@ mkdir -p /out
 rm -rf /out/image
 buildah --storage-driver vfs push "$TAG" "oci:/out/image:${TAG%%:*}"
 
-echo ">> done: /out/image  (OCI layout — feed to package-rootfs.sh)"
+echo ">> done: /out/image  (OCI layout; feed to package-rootfs.sh)"

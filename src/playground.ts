@@ -1,5 +1,5 @@
 // Drop a Dockerfile, encode into URL hash, navigate to the c2w-webvpn runtime
-// pointed at the prebuilt playground.wasm. No server-side build, no job ids —
+// pointed at the prebuilt playground.wasm. No server-side build, no job ids -
 // "playground" is one static wasm.
 
 import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from './shared'

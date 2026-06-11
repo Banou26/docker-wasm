@@ -59,7 +59,7 @@ function serveFile(res, full) {
 // cross-origin fkn/web iframe (e.g. http://127.0.0.1:1234) can reach us.
 //
 // This is a drop-in for fkn/proxy when you don't need anti-bot / Postgres
-// caching — for plain Docker Hub HTTPS it's all we need.
+// caching - for plain Docker Hub HTTPS it's all we need.
 async function handleProxy(req, res) {
     try {
         const protocol = (req.headers['fkn-proxy-protocol'] || 'https').toString()

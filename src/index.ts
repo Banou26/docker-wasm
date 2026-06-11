@@ -1,4 +1,4 @@
-// Library entry — re-exports the in-browser pieces of the c2w-webvpn stack so
+// Library entry - re-exports the in-browser pieces of the c2w-webvpn stack so
 // embedders can wire the netstack into their own c2w runtime.
 //
 // The Go-wasm proxy in src/proxy/ is the egress kernel; this JS layer is what

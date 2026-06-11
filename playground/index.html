@@ -37,14 +37,14 @@
         <details>
             <summary>How this works</summary>
             <ol>
-                <li>Your Dockerfile is base64-encoded into the URL hash (<code>#dockerfile=…</code>) — it never leaves the browser.</li>
+                <li>Your Dockerfile is base64-encoded into the URL hash (<code>#dockerfile=…</code>); it never leaves the browser.</li>
                 <li>We navigate to the c2w-webvpn runtime page, pointing it at a single pre-built
                     <code>playground.wasm</code> (≈150 MB, alpine + buildah, c2w'd once).</li>
                 <li>The wasm boots inside the browser. When the shell prompt appears, the page auto-types a build script:
                     decode the Dockerfile from the hash, write to <code>/work/Dockerfile</code>, run
                     <code>buildah --storage-driver vfs bud --isolation chroot</code>, then
                     <code>buildah run --tty</code> to drop you into the built container.</li>
-                <li>Buildah's network — registry pulls, RUN-step <code>apk/apt</code> — flows through this repo's
+                <li>Buildah's network (registry pulls, RUN-step <code>apk/apt</code>) flows through this repo's
                     gVisor netstack proxy, over <code>@webvpn</code>, out to the real internet. No CORS, real DNS, real TCP/UDP.</li>
             </ol>
             <p>First Bochs boot takes a few minutes (full x86 emulation). Subsequent builds inside the same tab are fast.</p>

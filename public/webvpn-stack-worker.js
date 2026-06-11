@@ -1,4 +1,4 @@
-// webvpn-stack-worker.js — runs c2w-webvpn-proxy.wasm.
+// webvpn-stack-worker.js - runs c2w-webvpn-proxy.wasm.
 // Variant of upstream stack-worker.js, with @webvpn egress imports instead of
 // the http_* fetch bridge. Inlines just the wasiHack pieces we need so we
 // don't have to importScripts a file with its own onmessage handler.
@@ -11,7 +11,7 @@ importScripts(location.origin + "/webvpn-imports.js");
 // from wasi-libc
 const ERRNO_INVAL = 28;
 
-// Minimal wasiHack: just stdio + poll_oneoff. No cert/fd-3 dance — our proxy
+// Minimal wasiHack: just stdio + poll_oneoff. No cert/fd-3 dance - our proxy
 // doesn't open fd 3.
 function wasiHack(wasi, connfd) {
     wasi.wasiImport.fd_fdstat_set_flags = (fd, fdflags) => 0;

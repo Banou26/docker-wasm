@@ -20,7 +20,7 @@ onmessage = (msg) => {
                 if (netParam.mode == 'delegate') {
                     args = ['arg0', '--net=socket', '--mac', genmac()];
                 } else if (netParam.mode == 'webvpn') {
-                    // c2w-webvpn: raw TCP/UDP to the proxy via socket fd 4 —
+                    // c2w-webvpn: raw TCP/UDP to the proxy via socket fd 4 -
                     // no TLS MITM, so no SSL_CERT_FILE / *_proxy env, no cert wait.
                     fds = [undefined, undefined, undefined, undefined, undefined, undefined];
                     args = ['arg0', '--net=socket=listenfd=4', '--mac', genmac()];

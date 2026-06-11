@@ -1,7 +1,7 @@
 // In-browser Docker Registry V2 client + docker-archive (USTAR) assembler.
 //
 // Docker Hub doesn't send CORS headers, so we route through @fkn/lib's
-// serverProxyFetch — the page's /proxy endpoint speaks the fkn-proxy-*
+// serverProxyFetch - the page's /proxy endpoint speaks the fkn-proxy-*
 // protocol and pass-throughs to upstream registries.
 //
 // Result of pullImage() is a Uint8Array containing a docker-archive tar (the

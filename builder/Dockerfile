@@ -5,8 +5,8 @@
 # provided by the c2w-webvpn netstack over @webvpn.
 #
 # Validated on a host (proxy for the emulated guest):
-#   - Phase 1: rootless buildah (vfs + chroot) builds a full Dockerfile — pull,
-#     RUN incl. network, commit — with no daemon and no privileged features.
+#   - Phase 1: rootless buildah (vfs + chroot) builds a full Dockerfile - pull,
+#     RUN incl. network, commit - with no daemon and no privileged features.
 #   - Phase 3: create-spec + mkisofs package the OCI image into rootfs.bin.
 # See README.md for the exact runs + output.
 #
@@ -27,7 +27,7 @@ FROM alpine:3.19
 RUN apk add --no-cache buildah cdrkit
 COPY --from=create-spec /create-spec /usr/local/bin/create-spec
 
-# vfs needs no overlayfs / loopback / privileged mounts — the safest storage
+# vfs needs no overlayfs / loopback / privileged mounts - the safest storage
 # driver inside an emulated kernel. chroot isolation avoids a nested runc and
 # user namespaces.
 ENV STORAGE_DRIVER=vfs \
@@ -41,7 +41,7 @@ COPY build-image.sh /usr/local/bin/build-image
 COPY package-rootfs.sh /usr/local/bin/package-rootfs
 RUN chmod +x /usr/local/bin/build-image /usr/local/bin/package-rootfs
 
-# The fixed c2w VM userland (busybox/runc/init/tini) goes here — build it once
+# The fixed c2w VM userland (busybox/runc/init/tini) goes here - build it once
 # from container2wasm and COPY it in. Without it package-rootfs produces an ISO
 # that won't boot.
 #   COPY --from=<c2w-vm-rootfs-stage> / /vmrootfs/

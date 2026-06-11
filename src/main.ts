@@ -68,7 +68,7 @@ const main = async () => {
 
   const { master, slave } = openpty()
   const termios = slave.ioctl('TCGETS')
-  // Pass through bytes verbatim — the c2w guest does its own line discipline.
+  // Pass through bytes verbatim - the c2w guest does its own line discipline.
   const iflag = termios.iflag & ~(ISTRIP | INLCR | IGNCR | ICRNL | IXON)
   const oflag = termios.oflag & ~OPOST
   const lflag = termios.lflag & ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN)

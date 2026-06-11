@@ -1,4 +1,4 @@
-// drive.cjs — boot alpine+curl in headless chrome via @webvpn, run curl,
+// drive.cjs - boot alpine+curl in headless chrome via @webvpn, run curl,
 // capture proof. Reads xterm's buffer directly via window.xterm.
 const puppeteer = require('puppeteer-core')
 
@@ -39,7 +39,7 @@ const readTerminal = () => {
     const reqs = []
     page.on('request', r => reqs.push({ method: r.method(), url: r.url() }))
     page.on('requestfailed', r => reqs.push({ failed: true, url: r.url(), err: r.failure()?.errorText }))
-    // capture iframe console too — the WebTransport happens there
+    // capture iframe console too - the WebTransport happens there
     browser.on('targetcreated', async (t) => {
         try {
             const f = await t.page()

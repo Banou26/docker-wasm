@@ -13,7 +13,7 @@ WASM := c2w-webvpn-proxy.wasm
 
 # dist/ is the canonical build output (mirrors libav-wasm). public/ holds a
 # copy so vite-dev serves the wasm at /c2w-webvpn-proxy.wasm without needing
-# the dist-middleware fallthrough — matches the URLs the runtime hardcodes.
+# the dist-middleware fallthrough - matches the URLs the runtime hardcodes.
 all: public/$(WASM)
 
 dist/$(WASM):

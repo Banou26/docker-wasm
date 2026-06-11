@@ -1,4 +1,4 @@
-// MAIN THREAD side of the c2w-webvpn netstack — runs alongside stack.ts.
+// MAIN THREAD side of the c2w-webvpn netstack - runs alongside stack.ts.
 //
 // Owns the real egress sockets. When the proxy worker asks to connect/send/recv
 // over a flow, those requests arrive here as postMessages and are serviced
@@ -63,7 +63,7 @@ export type Netstack = {
   handle: (req: NetstackRequest, sab: SAB) => boolean | Promise<void>
 }
 
-// Image cache — populated by main.ts when a Dockerfile hash is present in the URL.
+// Image cache - populated by main.ts when a Dockerfile hash is present in the URL.
 // Worker requests image_size/chunk; we serve from cached bytes.
 export type ImageCache = Map<string, ImageCacheEntry>
 
@@ -79,7 +79,7 @@ export const createWebvpnNetstack = (host: {
     const st: TcpState = { kind: 'tcp', sock, chunks: [], total: 0, fin: false, error: 0 }
     sock.on('data', (chunk: Uint8Array | ArrayBuffer) => {
       // Copy: @webvpn's stream reader may reuse backing buffers between reads
-      // — stashing the original would let a later read overwrite undrained bytes.
+      // - stashing the original would let a later read overwrite undrained bytes.
       const src = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
       const copy = new Uint8Array(src.length)
       copy.set(src)

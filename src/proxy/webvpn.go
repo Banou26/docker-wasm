@@ -36,7 +36,7 @@ import (
 
 // ---- wasmimport ABI ------------------------------------------------------
 //
-// network: 0 = TCP, 1 = UDP (connected datagram socket — the netstack always
+// network: 0 = TCP, 1 = UDP (connected datagram socket - the netstack always
 // dials a fixed remote, so we never need per-datagram addressing here).
 //
 // All functions return 0 on success or a non-zero errno-ish code. Output
@@ -91,7 +91,7 @@ func resolveDNS(query []byte) ([]byte, error) {
 }
 
 // wasmImagePuller implements netstack.ImagePuller via the webvpn_image_*
-// wasmimports — JS-side does the actual OCI Registry V2 pull, we just stream
+// wasmimports - JS-side does the actual OCI Registry V2 pull, we just stream
 // the resulting docker-archive bytes to the guest through gateway:9090.
 type wasmImagePuller struct{}
 

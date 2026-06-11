@@ -1,7 +1,7 @@
 // Package netstack is the in-browser gVisor network stack for container2wasm,
 // with the outbound dial left pluggable. main.go (wasip1) injects the @webvpn
 // dialer; tests inject net.Dial. This is the only thing that differs from
-// upstream c2w-net-proxy — see the package README.
+// upstream c2w-net-proxy - see the package README.
 package netstack
 
 import (
@@ -52,7 +52,7 @@ type DialFunc func(network, address string) (net.Conn, error)
 
 // ResolveDNSFunc takes a raw DNS query (wire format) and returns the raw DNS
 // response. In the browser this is plumbed through @fkn/lib's serverProxyFetch
-// to a DoH endpoint — much faster than tunnelling a fresh @webvpn UDP socket
+// to a DoH endpoint - much faster than tunnelling a fresh @webvpn UDP socket
 // per query. Optional; if nil, the gateway:53 forwarder falls back to
 // dialing UpstreamDNS via Dial("udp", …).
 type ResolveDNSFunc func(query []byte) ([]byte, error)

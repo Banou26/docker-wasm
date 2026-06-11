@@ -1,12 +1,12 @@
 #!/bin/sh
-# Runs INSIDE the builder guest. Packages the built OCI image into rootfs.bin —
+# Runs INSIDE the builder guest. Packages the built OCI image into rootfs.bin -
 # the Rock-Ridge ISO disk that the runtime emulator mounts and whose /oci tree
 # its init runc-runs.
 #
-# Inputs : /out/image    — OCI layout from build-image.sh
-#          $VM_ROOTFS    — the FIXED c2w VM userland (busybox/runc/init/tini/…).
+# Inputs : /out/image    - OCI layout from build-image.sh
+#          $VM_ROOTFS    - the FIXED c2w VM userland (busybox/runc/init/tini/…).
 #                          Built once and baked into this builder guest; it does
-#                          NOT change per build — only the container rootfs +
+#                          NOT change per build - only the container rootfs +
 #                          spec do.
 # Output : /out/rootfs.bin
 #
@@ -35,7 +35,7 @@ echo ">> overlay the fixed VM userland"
 if [ -d "$VM_ROOTFS" ]; then
 	cp -a "$VM_ROOTFS"/. "$pack"/
 else
-	echo "   WARNING: \$VM_ROOTFS ($VM_ROOTFS) not present — the ISO will lack"
+	echo "   WARNING: \$VM_ROOTFS ($VM_ROOTFS) not present; the ISO will lack"
 	echo "   init/runc/busybox and won't boot. Bake the c2w VM userland in."
 fi
 

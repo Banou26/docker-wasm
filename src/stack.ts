@@ -105,7 +105,7 @@ const connect = (
       console.log('UNKNOWN MSG ' + msg)
       return
     }
-    // First refusal for c2w-webvpn egress messages — fall through to the
+    // First refusal for c2w-webvpn egress messages - fall through to the
     // existing switch for legacy http_*/accept/send/etc.
     if ((req_.type as string).indexOf('webvpn_') === 0) {
       const w = netstack()
@@ -115,7 +115,7 @@ const connect = (
         Atomics.notify(streamCtrl, 0)
         return
       }
-      // handle() may be sync (returns true) or async (returns a Promise) —
+      // handle() may be sync (returns true) or async (returns a Promise) -
       // async handlers do their own SAB writes; we notify when they settle.
       Promise.resolve(w.handle(req_, { streamStatus, streamLen, streamData }))
         .catch(() => { streamStatus[0] = -1 })

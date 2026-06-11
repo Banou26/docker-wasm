@@ -1,8 +1,8 @@
-# c2w-webvpn — real TCP/UDP egress for container2wasm, in the browser
+# c2w-webvpn: real TCP/UDP egress for container2wasm, in the browser
 
 Run **any Docker image** in the browser (via [container2wasm](https://github.com/ktock/container2wasm))
 with **unrestricted TCP/UDP networking**, by routing the guest's traffic through
-[`@webvpn`](https://www.npmjs.com/package/@webvpn/net) — the same WebTransport-to-VPN
+[`@webvpn`](https://www.npmjs.com/package/@webvpn/net), the same WebTransport-to-VPN
 egress used to give WASM-compiled libtorrent full peer connectivity.
 
 This is the "Path B" from the design discussion: instead of intercepting BSD
@@ -16,10 +16,10 @@ gVisor netstack and dialing the real destination over `@webvpn`.
 container2wasm already ships an in-browser network stack (`c2w-net-proxy.wasm`,
 built on gVisor + gvisor-tap-vsock). But in the browser its egress is limited to
 the **Fetch API**, so the guest can only reach **HTTP/HTTPS** sites that also
-permit CORS — no raw TCP, no UDP, no `apt-get`, no DNS-over-UDP, no SSH, no
+permit CORS: no raw TCP, no UDP, no `apt-get`, no DNS-over-UDP, no SSH, no
 BitTorrent.
 
-The limitation is *not* the netstack — gVisor terminates arbitrary TCP/UDP just
+The limitation is *not* the netstack; gVisor terminates arbitrary TCP/UDP just
 fine. It's the final hop: upstream dials out with Go's `net.Dial`, which doesn't
 exist under `GOOS=wasip1`, so they fall back to `fetch()`. `@webvpn` provides
 real browser-side TCP/UDP egress, which is exactly the missing hop.
@@ -46,27 +46,27 @@ unchanged.
 
 ### The egress seam
 
-* `src/proxy/netstack/` — assembles the gVisor stack from gvisor-tap-vsock's
+* `src/proxy/netstack/`: assembles the gVisor stack from gvisor-tap-vsock's
   exported pieces (`tap.NewLinkEndpoint/NewSwitch/NewIPPool`, `dhcp.New`) and
   installs TCP + UDP forwarders that dial via an injected `DialFunc`. A small
   DNS forwarder on the gateway relays the guest's `:53` queries out over UDP
   (the guest's resolver is pointed at the gateway by DHCP). The dial is a
-  parameter, not a hard dependency — the wasm build injects `@webvpn`, the
+  parameter, not a hard dependency: the wasm build injects `@webvpn`, the
   test injects `net.Dial`.
-* `src/proxy/main.go` — the thin wasip1 entrypoint: wires the `@webvpn` dialer
+* `src/proxy/main.go` - the thin wasip1 entrypoint: wires the `@webvpn` dialer
   into the netstack, finds the emulator socket among the WASI preopens, and
   serves.
-* `src/proxy/webvpn.go` — a `net.Conn` backed by a JS-side `@webvpn` socket,
+* `src/proxy/webvpn.go`: a `net.Conn` backed by a JS-side `@webvpn` socket,
   plus the 4-function wasmimport ABI (`webvpn_connect/send/recv/close`).
   Non-blocking on the JS side; Go-side blocking is synthesised by polling +
   `time.Sleep`, which yields to the scheduler while the main thread fills
-  buffers — the same poll-driven, zero-Asyncify model libtorrent's
+  buffers, the same poll-driven, zero-Asyncify model libtorrent's
   `library_fkn.js` uses.
-* `public/webvpn-imports.js` — **worker side.** Implements the wasmimports as
+* `public/webvpn-imports.js`: **worker side.** Implements the wasmimports as
   blocking round-trips to the main thread over the existing SharedArrayBuffer
   stream protocol (identical mechanism to upstream's `http_send`). This stays
   plain JS because it's `importScripts()`'d into the c2w stack worker.
-* `src/webvpn-netstack.ts` — **main-thread side.** Owns the `@webvpn` sockets
+* `src/webvpn-netstack.ts`: **main-thread side.** Owns the `@webvpn` sockets
   and per-socket ring buffers, serviced on each worker round-trip. Ports the
   copy-on-receive discipline from `library_fkn.js`.
 
@@ -80,7 +80,7 @@ npm run make-docker
 
 Either produces `dist/c2w-webvpn-proxy.wasm` (Go ≥ 1.23 required for direct
 `make`; `make-docker` uses a pinned toolchain via Docker). The `.wasm` is
-gitignored — build it locally.
+gitignored; build it locally.
 
 ## Wiring into container2wasm's frontend
 
@@ -94,7 +94,7 @@ container2wasm's [`examples/wasi-browser`](https://github.com/ktock/container2wa
    Point the stack worker at our proxy
    (`stackImageName = "c2w-webvpn-proxy.wasm"`).
 
-2. **Worker side** (`stack-worker.js`) — register the egress imports:
+2. **Worker side** (`stack-worker.js`) - register the egress imports:
 
    ```js
    importScripts(location.origin + "/webvpn-imports.js");
@@ -105,7 +105,7 @@ container2wasm's [`examples/wasi-browser`](https://github.com/ktock/container2wa
    })
    ```
 
-3. **Main thread** (`stack.js`) — give the message handler first refusal:
+3. **Main thread** (`stack.js`) - give the message handler first refusal:
 
    ```js
    import { connect as netConnect } from "@webvpn/net";
@@ -125,7 +125,7 @@ HTTP proxy), you can also drop the `*_proxy` / `SSL_CERT_FILE` env vars that the
 fetch-based example pre-configures.
 
 Cross-origin isolation (`COOP: same-origin` + `COEP: require-corp`) is required
-for `SharedArrayBuffer` — the same requirement container2wasm already has.
+for `SharedArrayBuffer`, the same requirement container2wasm already has.
 
 ## Example: alpine + curl
 
@@ -138,7 +138,7 @@ Build it, convert it to wasm, build the proxy, and bundle the runtime with:
 
 It produces `build/` (Vite output). Note: `c2w` clones/compiles the emulator
 and runs `apk add` **inside build containers**, so it needs an environment
-where Docker build containers have outbound network — it will not run in a
+where Docker build containers have outbound network; it will not run in a
 network-restricted sandbox.
 
 ## Tests
@@ -162,16 +162,16 @@ cd src/proxy && go test ./netstack/ -v
 # PASS: TestTCPForwardThroughProxy, TestUDPForwardThroughProxy
 ```
 
-(The native build uses a no-op DHCP stub — gvisor-tap-vsock's dhcp service only
-compiles for wasm — so the test guest is statically addressed.)
+(gvisor-tap-vsock's dhcp service only compiles for wasm, so the native build
+uses a no-op DHCP stub and the test guest is statically addressed.)
 
 ## Building Dockerfiles in the browser (spike)
 
 `builder/` explores the bigger goal: building an *arbitrary Dockerfile* to wasm
 **entirely in the browser**. Because `RUN` executes arch-specific binaries, this
 reduces to running a rootless OCI builder (`buildah`) inside the emulated Linux
-guest, with egress over this netstack. Phase 1 — the make-or-break "does
-rootless/daemonless buildah build under the guest's constraints?" — is
+guest, with egress over this netstack. Phase 1 (the make-or-break "does
+rootless/daemonless buildah build under the guest's constraints?") is
 **validated**. See `builder/README.md`.
 
 ## Status & limitations
@@ -189,7 +189,7 @@ This is a working **foundation**, not a turn-key product. What's verified vs. no
   ends in the test (synthetic guest, `net.Dial`) are exactly those pieces.
   Expect to debug the first browser boot.
 * ⚠️ **Building a container image** with `c2w` needs Docker, and the build clones
-  emulator/runc sources over TLS — in network-restricted/TLS-intercepting
+  emulator/runc sources over TLS; in network-restricted/TLS-intercepting
   sandboxes those clones fail. Build the image where outbound TLS is unrestricted.
 
 Known rough edges / TODO:
@@ -199,7 +199,7 @@ Known rough edges / TODO:
 * **recv latency.** Blocking reads poll on a `pollInterval` (2 ms) timer rather
   than blocking efficiently on the main thread. A `recv-is-readable`-style
   timeout notify (as upstream uses for the guest socket) would cut idle latency
-  and CPU — see `webvpn.go`'s `Read`.
+  and CPU; see `webvpn.go`'s `Read`.
 * **IPv6.** The stack is wired for IPv4 only (matches upstream). UDP sockets are
   `udp4`.
 * **TCP DNS.** Only UDP `:53` is forwarded; large/truncated responses needing TCP

@@ -1,4 +1,4 @@
-# alpine + curl — full browser E2E
+# alpine + curl: full browser E2E
 
 A container (alpine + curl + bind-tools) running entirely in a browser via
 container2wasm, with **real TCP/UDP egress through `@webvpn`**, terminated by
@@ -47,7 +47,7 @@ You need a normal dev machine (Docker w/ network, Go ≥ 1.23, node, c2w).
 ### 1. Start the local @webvpn backend (one-time)
 
 ```sh
-# Rust WebTransport server (~/dev/fkn/webvpn) — listens on :4433/:4434
+# Rust WebTransport server (~/dev/fkn/webvpn) - listens on :4433/:4434
 cd ~/dev/fkn/webvpn && ./target/release/webvpn &
 
 # fkn/web vite dev (the @fkn/lib RPC iframe target)
@@ -65,9 +65,9 @@ FKN_API="http://127.0.0.1:1234/api.html" ./scripts/build-image.sh
 ```
 
 This produces (in `build/`):
-- `out.wasm` — the alpine container (≈120 MB)
-- `c2w-webvpn-proxy.wasm` — the netstack proxy
-- `assets/index.js` — the Vite-bundled main thread (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
+- `out.wasm`: the alpine container (≈120 MB)
+- `c2w-webvpn-proxy.wasm`: the netstack proxy
+- `assets/index.js`: the Vite-bundled main thread (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
 - the upstream c2w `wasi-browser` worker scripts (`worker.js`, `stack-worker.js`, `browser_wasi_shim/`, `wasi-util.js`, `worker-util.js`, `ws-delegate.js`) + our `webvpn-stack-worker.js` + `webvpn-imports.js`
 
 ### 3. Serve cross-origin-isolated
@@ -107,7 +107,7 @@ from `src/`:
 | -------------------------------- | --------------------------------------------------------------------- |
 | `index.html`                     | iframe-credentialless shim, `<script type=module>` entry              |
 | `src/main.ts`                    | ghostty-web init, xterm-pty + TtyServer, worker wiring                |
-| `src/stack.ts`                   | SAB-bridged message handler — first-refusal `webvpn.handle()`         |
+| `src/stack.ts`                   | SAB-bridged message handler - first-refusal `webvpn.handle()`         |
 | `src/webvpn-netstack.ts`         | `@webvpn` TCP/UDP socket pool + per-image cache + DoH DNS             |
 | `src/registry.ts`                | in-browser OCI Registry V2 client + docker-archive tar assembler      |
 | `public/worker.js`               | upstream c2w WASI worker, patched `?net=webvpn` branch (no cert dance)|
@@ -120,5 +120,5 @@ from `src/`:
   via the gateway (`192.168.127.1`) isn't set unless you do
   `echo nameserver 192.168.127.1 > /etc/resolv.conf` inside the container.
   Curl by IP (e.g. `https://1.1.1.1/`) works out of the box.
-- The proxy boots a full bochs/x86 emulator — first prompt typically takes
+- The proxy boots a full bochs/x86 emulator; first prompt typically takes
   several minutes.

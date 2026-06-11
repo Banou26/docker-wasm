@@ -1,4 +1,4 @@
-// webvpn-imports.js — WORKER side (runs in stack-worker.js).
+// webvpn-imports.js - WORKER side (runs in stack-worker.js).
 //
 // Defines the four `env` wasmimports that c2w-webvpn-proxy.wasm calls for
 // egress. Each one is a synchronous, blocking round-trip to the main thread
@@ -109,7 +109,7 @@ function webvpnEnvImports(wasi) {
         // webvpn_image_size(refP, refLen, sizeP) -> errno
         // Looks up an in-browser-pulled image (by ref) and returns its docker-
         // archive byte length in *sizeP. The JS handler may await the pull
-        // Promise — the worker blocks until it's resolved.
+        // Promise - the worker blocks until it's resolved.
         webvpn_image_size: function (refP, refLen, sizeP) {
             const ref = new Uint8Array(mem(), refP, refLen).slice();
             streamCtrl[0] = 0;
