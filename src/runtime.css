@@ -329,9 +329,17 @@ a:focus-visible {
   }
 
   .session-title {
+    min-width: 0;
+    max-width: 100%;
     justify-self: end;
     overflow: hidden;
     white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  #runtime-state {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
   }
 

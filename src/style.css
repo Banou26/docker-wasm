@@ -583,6 +583,7 @@ a:focus-visible {
     min-height: auto;
     display: grid;
     grid-template-columns: 1fr 1fr;
+    align-items: start;
   }
 
   .launch-pane > div:first-child,

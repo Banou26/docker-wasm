@@ -28,7 +28,14 @@ import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, type NetMode } from '
 // Loaded into globals by /ws-delegate.js (kept as a static asset under public/).
 declare const delegate: (worker: Worker, image: string, address: string) => (msg: MessageEvent) => void
 
+let currentRuntimeStage = 0
+let runtimeFailed = false
+
 const setRuntimeStage = (stage: number, message: string, tone: 'normal' | 'error' = 'normal'): void => {
+  if (runtimeFailed && tone !== 'error') return
+  if (stage < currentRuntimeStage) return
+  currentRuntimeStage = stage
+  if (tone === 'error') runtimeFailed = true
   const state = document.getElementById('runtime-state')
   if (state) {
     state.textContent = message
@@ -91,13 +98,13 @@ const main = async () => {
   if (!terminalEl) throw new Error('#terminal not found')
   xterm.open(terminalEl)
 
-  // Resize the terminal to fill its container. FitAddon installs its own
-  // ResizeObserver on the parent so the canvas tracks viewport changes; each
-  // xterm.resize(cols, rows) fires master.onResize -> slave.notifyResize, which
-  // pushes SIGWINCH (with the new winsize) up to the c2w guest.
+  // Resize the terminal to fill its container. Each xterm.resize(cols, rows)
+  // fires master.onResize -> slave.notifyResize, which pushes SIGWINCH (with
+  // the new winsize) up to the c2w guest.
   const fitAddon = new FitAddon()
   xterm.loadAddon(fitAddon)
   fitAddon.fit()
+  fitAddon.observeResize()
 
   const { master, slave } = openpty()
   const termios = slave.ioctl('TCGETS')
@@ -169,14 +176,18 @@ const main = async () => {
   new TtyServer(slave).start(worker as unknown as Parameters<TtyServer['start']>[0], nwStack)
 
   const terminalTail = (count: number): string => {
-    const buf = xterm.buffer.active
-    const cursorRow = buf.baseY + buf.cursorY
-    let text = ''
-    for (let y = Math.max(0, cursorRow - count); y <= cursorRow; y++) {
-      const line = buf.getLine(y)
-      if (line) text += line.translateToString(true) + '\n'
-    }
-    return text
+    return [xterm.buffer.normal, xterm.buffer.alternate]
+      .map((buf) => {
+        const cursorRow = buf.baseY + buf.cursorY
+        let text = ''
+        for (let y = Math.max(0, cursorRow - count); y <= cursorRow; y++) {
+          const line = buf.getLine(y)
+          if (line) text += line.translateToString(true) + '\n'
+        }
+        return text.trimEnd()
+      })
+      .filter(Boolean)
+      .join('\n')
   }
 
   // In-browser dockerfile playground: if location.hash carries a base64
@@ -200,7 +211,9 @@ const main = async () => {
   while (dockerfileB64Padded.length % 4) dockerfileB64Padded += '='
 
   const refs = dockerfileFromRefs(dockerfileText)
-  setRuntimeStage(1, 'Pulling ' + refs.length + ' base image' + (refs.length === 1 ? '' : 's'))
+  setRuntimeStage(1, refs.length === 0
+    ? 'No base image pull required'
+    : 'Pulling ' + refs.length + ' base image' + (refs.length === 1 ? '' : 's'))
   let readyRefs = 0
   for (const ref of refs) {
     if (imageCache.has(ref)) continue
@@ -242,16 +255,24 @@ const main = async () => {
     "echo '" + dockerfileB64Padded + "' | base64 -d > Dockerfile\n" +
     'echo == buildah build ==\n' +
     'buildah bud --isolation chroot --network host --pull=never -t userimg .\n' +
-    'echo == running container ==\n' +
-    'ctr=$(buildah from userimg) && buildah run --network host --terminal --env TERM=dumb "$ctr" /bin/sh\n'
-  const script = "sh -eu <<'FKN_BUILD'\n" + buildCommands + 'FKN_BUILD\n'
+    'echo == build complete ==\n'
+  const script =
+    "if sh -eu <<'FKN_BUILD'\n" + buildCommands +
+    'FKN_BUILD\n' +
+    'then\n' +
+    '  echo __FKN_BUILD_"OK"__\n' +
+    '  echo == running container ==\n' +
+    '  ctr=$(buildah from userimg) && exec buildah run --network host --terminal --env TERM=dumb "$ctr" /bin/sh\n' +
+    'else\n' +
+    '  echo __FKN_BUILD_"FAILED"__\n' +
+    'fi\n'
 
   // Wait for the shell to print a "# " prompt before pasting; ghostty-web's
   // buffer matches xterm.js's (baseY + cursorY → row index; getLine().translateToString()).
   let sent = false
   const tryFeed = () => {
     if (sent) return
-    const last = terminalTail(2)
+    const last = terminalTail(2).trimEnd()
     if (!/# *$/.test(last)) return
     sent = true
     setRuntimeStage(2, 'Building Dockerfile in Linux')
@@ -259,13 +280,13 @@ const main = async () => {
   }
   const iv = setInterval(() => { tryFeed(); if (sent) clearInterval(iv) }, 1000)
   const buildTimer = setInterval(() => {
-    const output = terminalTail(80)
-    if (output.includes('Error: building at STEP')) {
+    const output = terminalTail(80).trimEnd()
+    if (output.includes('__FKN_BUILD_FAILED__')) {
       clearInterval(buildTimer)
       setRuntimeStage(2, 'Dockerfile build failed', 'error')
       return
     }
-    if (!output.includes('Successfully tagged')) return
+    if (!output.includes('__FKN_BUILD_OK__')) return
     setRuntimeStage(3, /\/ #\s*$/.test(output) ? 'Container shell ready' : 'Starting container shell')
     if (/\/ #\s*$/.test(output)) clearInterval(buildTimer)
   }, 1000)

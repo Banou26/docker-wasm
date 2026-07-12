@@ -23,9 +23,6 @@ type TcpState = {
   total: number
   paused: boolean
   writeBlocked: boolean
-  received: number
-  receiveCalls: number
-  largestChunk: number
   fin: boolean
   error: number
 }
@@ -91,9 +88,6 @@ export const createWebvpnNetstack = (host: {
       total: 0,
       paused: false,
       writeBlocked: false,
-      received: 0,
-      receiveCalls: 0,
-      largestChunk: 0,
       fin: false,
       error: 0,
     }
@@ -104,7 +98,6 @@ export const createWebvpnNetstack = (host: {
       copy.set(src)
       st.chunks.push(copy)
       st.total += copy.length
-      st.largestChunk = Math.max(st.largestChunk, copy.length)
       if (!st.paused && st.total >= TCP_BUFFER_HIGH_WATER) {
         st.paused = true
         sock.pause()
@@ -171,10 +164,6 @@ export const createWebvpnNetstack = (host: {
   const closeSocket = (id: number): void => {
     const st = sockets.get(id)
     if (!st) return
-    if (st.kind === 'tcp') {
-      console.log('[webvpn] close tcp id=' + id + ' received=' + st.received +
-        ' calls=' + st.receiveCalls + ' largest=' + st.largestChunk)
-    }
     try {
       if (st.kind === 'tcp') (st.sock as { destroy: () => void }).destroy()
       else (st.sock as { close: () => void }).close()
@@ -238,10 +227,6 @@ export const createWebvpnNetstack = (host: {
           }
           const len = Math.min(req.len, streamData.byteLength)
           const out = st.kind === 'tcp' ? drainTCP(st, len) : drainUDP(st, len)
-          if (st.kind === 'tcp') {
-            st.receiveCalls++
-            st.received += out.bytes.length
-          }
           streamLen[0] = out.bytes.length
           if (out.bytes.length > 0) streamData.set(out.bytes, 0)
           streamStatus[0] = out.eof ? 1 : 0

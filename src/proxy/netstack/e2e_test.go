@@ -312,14 +312,21 @@ func setupWithConfig(t *testing.T, cfg Config) *stack.Stack {
 	if err != nil {
 		t.Fatalf("netstack.New: %v", err)
 	}
+	serveDone := make(chan struct{})
 	go func() {
-		if err := nw.Serve(context.Background(), proxyConn); err != nil {
-			t.Logf("proxy serve ended: %v", err)
-		}
+		_ = nw.Serve(context.Background(), proxyConn)
+		close(serveDone)
 	}()
 
 	guest := newGuestStack(t, guestConn)
-	t.Cleanup(func() { guestConn.Close(); proxyConn.Close() })
+	t.Cleanup(func() {
+		guestConn.Close()
+		proxyConn.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+		}
+	})
 	return guest
 }
 

@@ -49,7 +49,7 @@ pass-through, structurally identical to running fkn/proxy locally).
 ./scripts/build-playground.sh
 
 # Re-stage into the served build/ (Vite copies public/ -> build/ on build):
-( cd ../../.. && npm run build )
+npm run build
 ```
 
 `VM_MEMORY_SIZE_MB=512` is required: buildah's chroot-isolation RUN spawns a

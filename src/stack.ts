@@ -169,14 +169,17 @@ const connect = (
         } else if (req_.timeout != undefined && req_.timeout > 0) {
           if (timeoutHandler) clearTimeout(timeoutHandler)
           waitingReadable = true
-          timeoutHandler = setTimeout(() => {
-            if (timeoutHandler) { clearTimeout(timeoutHandler); timeoutHandler = null }
-            waitingReadable = false
-            streamData[0] = recvbuf.buf.byteLength > 0 ? 1 : 0
-            streamStatus[0] = 0
-            Atomics.store(streamCtrl, 0, 1)
-            Atomics.notify(streamCtrl, 0)
-          }, req_.timeout * 1000)
+          const timeoutMs = req_.timeout * 1000
+          if (Number.isFinite(timeoutMs) && timeoutMs <= 0x7FFFFFFF) {
+            timeoutHandler = setTimeout(() => {
+              if (timeoutHandler) { clearTimeout(timeoutHandler); timeoutHandler = null }
+              waitingReadable = false
+              streamData[0] = recvbuf.buf.byteLength > 0 ? 1 : 0
+              streamStatus[0] = 0
+              Atomics.store(streamCtrl, 0, 1)
+              Atomics.notify(streamCtrl, 0)
+            }, timeoutMs)
+          }
           return
         } else {
           streamData[0] = 0
