@@ -11,6 +11,7 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │         │ base64-encode Dockerfile -> URL hash, navigate                      │
 │         ▼                                                                     │
 │  /?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>          │
+│  optional service params: publish=tcp:8080&run=default                       │
 │         │                                                                     │
 │         │   (in parallel, JS parses FROM refs from the hash and pulls each    │
 │         │    image via @fkn/lib's serverProxyFetch -> /proxy shim -> Docker   │
@@ -22,26 +23,24 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │         │   wget http://192.168.127.1:9090/img/<ref> -O /tmp/<ref>.tar       │
 │         │   buildah pull docker-archive:/tmp/<ref>.tar                        │
 │         │   buildah bud --pull=never -t userimg .                             │
-│         │   ctr=$(buildah from userimg) && buildah run --tty "$ctr" /bin/sh  │
+│         │   shell: buildah run --tty "$ctr" /bin/sh                          │
+│         │   service: run image command + publish guest TCP through FKN        │
 │         ▼                                                                     │
 │  netstack proxy serves the pulled tar bytes at gateway:9090 via two          │
 │  wasmimports (webvpn_image_size + webvpn_image_chunk) into a JS-side cache.  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Nothing leaves the browser** except the actual Docker Hub HTTPS request,
-routed through @fkn/lib's `serverProxyFetch` chain (which sends an HTTP request
-to the page's own `/proxy` endpoint: a thin, fkn-proxy-compatible CORS
-pass-through, structurally identical to running fkn/proxy locally).
+Build state stays in the browser. Registry requests and guest TCP/UDP flows are
+carried by `@fkn/lib`; published service requests use the same transport in the
+opposite direction.
 
 ## Prereqs
 
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
-- For runtime: `~/dev/fkn/webvpn` (Rust WebTransport server) + `~/dev/fkn/web`
-  (vite dev) running locally; see `../alpine-curl/README.md`.
-- The alpine-curl runtime must be built first; run `scripts/build-image.sh`
-  once. It populates `public/` with `out.wasm`, `c2w-webvpn-proxy.wasm`, the
-  upstream c2w worker assets, then runs the Vite build into `build/`.
+- The proxy and playground WASM artifacts must exist under `public/`. They are
+  generated locally and gitignored.
+- The hosted FKN API is used by default.
 
 ## Build the playground wasm (one-time, ≈ 5 min)
 
@@ -62,23 +61,16 @@ once; their Dockerfiles cost zero on the build side.
 ## Run
 
 ```sh
-# the @fkn/lib iframe needs to know where to send proxyFetches:
-CERT_HASH=$(curl -s http://localhost:4434/cert-hash)
-cd ~/dev/fkn/web && \
-    VITE_WEBVPN_ORIGIN="https://localhost:4433" \
-    VITE_WEBVPN_CERT_HASH_URL="http://localhost:4434/cert-hash" \
-    VITE_PROXY_ORIGIN="http://127.0.0.1:8080/proxy" \
-    npx vite --port 1234 --host 127.0.0.1 &
-
-# the playground itself:
-node scripts/serve.cjs    # static + /proxy (fkn-proxy-compatible CORS shim), COOP/COEP, port 8080
+npm run dev-web
 ```
 
-Open <http://127.0.0.1:8080/playground/>. Drop or paste a Dockerfile. Click
-"Open in browser". The JS-side starts pulling FROM images immediately; once
-Bochs boots, the auto-paste wget's the bytes from the netstack proxy's
-gateway:9090 HTTP server and `buildah pull docker-archive:` them in. Then it
-runs the user's Dockerfile and drops into `buildah run --tty` on the result.
+Open <http://localhost:1234/playground/>. Drop or paste a Dockerfile, choose a
+launch, and click the launch button. The JS side starts pulling FROM images
+immediately. Once Bochs boots, the auto-paste downloads the bytes from the
+netstack proxy's gateway:9090 HTTP server and imports them with
+`buildah pull docker-archive:`. It then runs the user's Dockerfile. Shell mode
+opens `/bin/sh`. HTTP service mode starts the image command, waits for guest port
+8080, and requests the service through the published FKN TCP route.
 
 ## What works today
 
@@ -91,8 +83,15 @@ runs the user's Dockerfile and drops into `buildah run --tty` on the result.
 * ✅ **DNS via DoH**: gateway:53 queries are POSTed to Cloudflare DoH via
   serverProxyFetch; buildah's network from inside Bochs never has to wait on
   UDP through @webvpn.
-* ✅ **RUN steps with network**: the @webvpn netstack path still serves
+* ✅ **RUN steps with network**: the FKN netstack path serves
   arbitrary TCP/UDP for `RUN apk add …` etc.
+* ✅ **Interactive shell**: both Ghostty terminal buffers are rendered and the
+  final container prompt accepts input.
+* ✅ **Published HTTP service**: `publish=tcp:8080` opens an ephemeral FKN TCP
+  listener, gVisor reverse-dials the guest DHCP lease, and the browser receives
+  the image's HTML response.
+* ✅ **Responsive UI**: the workbench and runtime are validated at desktop and
+  mobile widths.
 
 ## Known sharp edges
 
@@ -102,6 +101,7 @@ runs the user's Dockerfile and drops into `buildah run --tty` on the result.
 * The base64 hash payload caps at the URL length the browser allows (a few
   kilobytes in practice). Larger Dockerfiles or contexts would need a
   different transport.
+* Published routes currently support TCP only and close with the page.
 
 ## Why no backend
 

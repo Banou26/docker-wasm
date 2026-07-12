@@ -242,6 +242,10 @@ body {
   box-shadow: 7px 7px 0 #252720;
 }
 
+.terminal-frame.has-service {
+  grid-template-rows: 44px auto minmax(0, 1fr);
+}
+
 .terminal-toolbar {
   padding: 0 14px;
   border-bottom: 1px solid #2e302b;
@@ -293,6 +297,73 @@ body {
   height: 100%;
   background: var(--runtime-acid);
   transition: width 300ms ease;
+}
+
+.service-panel {
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid #5e741f;
+  display: grid;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(240px, 1.2fr) auto;
+  align-items: center;
+  gap: 16px;
+  background: var(--runtime-acid);
+  color: var(--runtime-ink);
+}
+
+.service-panel[hidden] {
+  display: none;
+}
+
+.service-endpoint,
+.service-result {
+  min-width: 0;
+}
+
+.service-panel span,
+.service-panel strong,
+.service-panel output {
+  display: block;
+}
+
+.service-panel span {
+  margin-bottom: 3px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.service-panel strong,
+.service-panel output {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-panel output {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+#service-probe {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--runtime-ink);
+  background: var(--runtime-ink);
+  color: #f5f6ef;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+#service-probe:disabled {
+  opacity: 0.45;
+  cursor: wait;
 }
 
 #terminal {
@@ -408,6 +479,28 @@ a:focus-visible {
 
   .terminal-toolbar > span {
     display: none;
+  }
+
+  .service-panel {
+    padding: 9px 10px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 10px;
+  }
+
+  .service-result {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .service-panel strong,
+  .service-panel output {
+    font-size: 9px;
+  }
+
+  #service-probe {
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 8px;
   }
 
   #terminal {

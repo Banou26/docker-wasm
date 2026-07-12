@@ -16,6 +16,8 @@ export const QUERY_PARAMS = {
   wasmUrl: 'wasm-url',
   // Legacy backend-built mode (resolves to /wasm/<id>/out.wasm).
   wasm: 'wasm',
+  publish: 'publish',
+  run: 'run',
 } as const
 
 export type NetMode = 'delegate' | 'browser' | 'webvpn'

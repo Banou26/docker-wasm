@@ -1,15 +1,15 @@
 # c2w-webvpn: real TCP/UDP egress for container2wasm, in the browser
 
 Run **any Docker image** in the browser (via [container2wasm](https://github.com/ktock/container2wasm))
-with **unrestricted TCP/UDP networking**, by routing the guest's traffic through
-[`@webvpn`](https://www.npmjs.com/package/@webvpn/net), the same WebTransport-to-VPN
-egress used to give WASM-compiled libtorrent full peer connectivity.
+with TCP/UDP egress and published inbound TCP routes. Guest traffic is carried
+through [`@fkn/lib`](https://www.npmjs.com/package/@fkn/lib), the same FKN
+transport used by WASM-compiled libtorrent.
 
 This is the "Path B" from the design discussion: instead of intercepting BSD
 socket syscalls of a single Emscripten program (which only works for programs
 *you* compile), we let container2wasm emulate a full Linux kernel and intercept
 at the **virtual NIC**, terminating the guest's IP traffic in an in-browser
-gVisor netstack and dialing the real destination over `@webvpn`.
+gVisor netstack and dialing the real destination over FKN.
 
 ## Why this is needed
 
@@ -21,8 +21,8 @@ BitTorrent.
 
 The limitation is *not* the netstack; gVisor terminates arbitrary TCP/UDP just
 fine. It's the final hop: upstream dials out with Go's `net.Dial`, which doesn't
-exist under `GOOS=wasip1`, so they fall back to `fetch()`. `@webvpn` provides
-real browser-side TCP/UDP egress, which is exactly the missing hop.
+exist under `GOOS=wasip1`, so they fall back to `fetch()`. `@fkn/lib` provides
+browser-side TCP/UDP sockets, which are exactly the missing hop.
 
 ## Architecture
 
@@ -31,8 +31,8 @@ real browser-side TCP/UDP egress, which is exactly the missing hop.
  │                                                                         │
  │  Worker: emulator            Worker: this netstack         Main thread  │
  │  ┌──────────────┐  QEMU      ┌───────────────────────┐                  │
- │  │ TinyEMU /    │  ethernet  │ gVisor netstack        │   @webvpn/net    │
- │  │ Bochs + Linux│═══frames══▶│  • DHCP/ARP/DNS gw     │   @webvpn/dgram  │
+ │  │ TinyEMU /    │  ethernet  │ gVisor netstack        │   @fkn/lib/net   │
+ │  │ Bochs + Linux│═══frames══▶│  • DHCP/ARP/DNS gw     │   @fkn/lib/dgram │
  │  │ + your image │            │  • TCP/UDP forwarder ──┼──▶ wasmimport ──▶│──▶ VPN ──▶ internet
  │  └──────────────┘            └───────────────────────┘   (SAB round-trip)│
  │                                                                         │
@@ -44,6 +44,11 @@ The only thing this project changes vs. stock container2wasm is the forwarder's
 (emulation, QEMU framing, DHCP, ARP, the gVisor TCP/IP termination) is reused
 unchanged.
 
+Published TCP runs the same path in reverse. The main thread opens an FKN TCP
+listener, accepted sockets cross the SharedArrayBuffer ABI, and the gVisor stack
+dials the guest's DHCP lease and requested port. Publications are scoped to the
+page lifecycle and allow up to 32 active inbound sockets.
+
 ### The egress seam
 
 * `src/proxy/netstack/`: assembles the gVisor stack from gvisor-tap-vsock's
@@ -51,13 +56,15 @@ unchanged.
   installs TCP + UDP forwarders that dial via an injected `DialFunc`. A small
   DNS forwarder on the gateway relays the guest's `:53` queries out over UDP
   (the guest's resolver is pointed at the gateway by DHCP). The dial is a
-  parameter, not a hard dependency: the wasm build injects `@webvpn`, the
+  parameter, not a hard dependency: the wasm build injects FKN sockets, the
   test injects `net.Dial`.
-* `src/proxy/main.go` - the thin wasip1 entrypoint: wires the `@webvpn` dialer
+  It also forwards published TCP sockets into the guest.
+* `src/proxy/main.go` - the thin wasip1 entrypoint: wires the FKN dialer
   into the netstack, finds the emulator socket among the WASI preopens, and
   serves.
-* `src/proxy/webvpn.go`: a `net.Conn` backed by a JS-side `@webvpn` socket,
-  plus the 4-function wasmimport ABI (`webvpn_connect/send/recv/close`).
+* `src/proxy/webvpn.go`: a `net.Conn` backed by a JS-side FKN socket, plus the
+  wasmimport ABI for connect, send, receive, half-close, close, DNS, image
+  streaming, and inbound socket polling.
   Non-blocking on the JS side; Go-side blocking is synthesised by polling +
   `time.Sleep`, which yields to the scheduler while the main thread fills
   buffers, the same poll-driven, zero-Asyncify model libtorrent's
@@ -66,9 +73,9 @@ unchanged.
   blocking round-trips to the main thread over the existing SharedArrayBuffer
   stream protocol (identical mechanism to upstream's `http_send`). This stays
   plain JS because it's `importScripts()`'d into the c2w stack worker.
-* `src/webvpn-netstack.ts`: **main-thread side.** Owns the `@webvpn` sockets
-  and per-socket ring buffers, serviced on each worker round-trip. Ports the
-  copy-on-receive discipline from `library_fkn.js`.
+* `src/webvpn-netstack.ts`: **main-thread side.** Owns the `@fkn/lib` sockets,
+  TCP publications, and per-socket ring buffers serviced on each worker
+  round-trip. Ports the copy-on-receive discipline from `library_fkn.js`.
 
 ## Build
 
@@ -81,6 +88,29 @@ npm run make-docker
 Either produces `dist/c2w-webvpn-proxy.wasm` (Go ≥ 1.23 required for direct
 `make`; `make-docker` uses a pinned toolchain via Docker). The `.wasm` is
 gitignored; build it locally.
+
+## Container Lab
+
+The responsive `/playground/` UI turns the network stack into a complete browser
+demo. It supports two launches:
+
+* **Shell** builds the Dockerfile and opens `/bin/sh` in the resulting image.
+* **HTTP service** builds a dependency-free Alpine image, runs its default
+  command, publishes guest TCP port 8080, and sends `GET /` from the browser
+  through the returned FKN relay port.
+
+The service launch uses `?publish=tcp:8080&run=default`. `publish` starts the
+FKN listener and reverse gVisor dial. `run=default` combines the image entrypoint
+and command instead of replacing them with `/bin/sh`. The runtime waits for a
+guest-local HTTP response before starting the browser probe.
+
+```sh
+npm install
+npm run dev-web
+```
+
+Open <http://localhost:1234/playground/>. The generated proxy and playground
+WASM files under `public/` are gitignored and must already be built locally.
 
 ## Wiring into container2wasm's frontend
 
@@ -108,9 +138,8 @@ container2wasm's [`examples/wasi-browser`](https://github.com/ktock/container2wa
 3. **Main thread** (`stack.js`) - give the message handler first refusal:
 
    ```js
-   import { connect as netConnect } from "@webvpn/net";
-   import * as dgram from "@webvpn/dgram";
-   const webvpn = createWebvpnNetstack({ net: { connect: netConnect }, dgram });
+   import { createWebvpnNetstack } from "./webvpn-netstack";
+   const webvpn = createWebvpnNetstack({ imageCache });
 
    // inside connect()'s returned handler, before the existing switch:
    if (webvpn.handle(req_, { streamStatus, streamLen, streamData })) {
@@ -144,22 +173,22 @@ network-restricted sandbox.
 ## Tests
 
 `src/proxy/netstack/e2e_test.go` is a hermetic end-to-end test of the data path. It
-can't drive the real emulator or `@webvpn`, so it substitutes the two ends with
+can't drive the real emulator or FKN, so it substitutes the two ends with
 production-equivalent interfaces:
 
 * **guest** → a second gVisor stack with an ethernet link endpoint, wired to the
   proxy over a loopback connection carrying **real QEMU-protocol frames** (the
   exact framing the emulator emits).
-* **`@webvpn` egress** → `net.Dial` to a local echo server.
+* **FKN egress** → `net.Dial` to a local echo server.
 
-It then has the guest open a TCP and a UDP flow "to the internet" and asserts
-the proxy (a) terminates the flow in its gVisor stack, (b) extracts the correct
-destination in the forwarder, (c) dials out via the seam, and (d) round-trips
-bytes both ways.
+It has the guest open TCP and UDP flows through the proxy, then injects a TCP
+connection in the opposite direction and verifies native TCP half-close. The
+tests cover destination extraction, DNS handling, outbound dialing, reverse
+guest dialing, and bytes in both directions.
 
 ```sh
-cd src/proxy && go test ./netstack/ -v
-# PASS: TestTCPForwardThroughProxy, TestUDPForwardThroughProxy
+cd src/proxy && go test ./...
+go test -race ./netstack -run TestTCPIngressToGuest -count=20
 ```
 
 (gvisor-tap-vsock's dhcp service only compiles for wasm, so the native build
@@ -176,18 +205,19 @@ rootless/daemonless buildah build under the guest's constraints?") is
 
 ## Status & limitations
 
-This is a working **foundation**, not a turn-key product. What's verified vs. not:
+This is a working browser capability demo. Verified behavior includes:
 
 * ✅ The Go proxy compiles to `GOOS=wasip1 GOARCH=wasm` (gVisor + gvisor-tap-vsock
   + the dial seam).
 * ✅ The **core data path is tested end-to-end** natively (see Tests above):
   QEMU frames → gVisor termination → TCP/UDP forwarders → correct destination →
   dial → bytes both ways.
-* ✅ The JS glue is syntactically valid and matches the upstream SAB protocol.
-* ⚠️ **The full browser boot is not yet validated**: the real emulator + the JS
-  glue + a live `@webvpn` server + cross-origin isolation. The two substituted
-  ends in the test (synthetic guest, `net.Dial`) are exactly those pieces.
-  Expect to debug the first browser boot.
+* ✅ Full browser boot with the real emulator, SharedArrayBuffer bridge, hosted
+  FKN transport, live Docker Hub image pull, Buildah build, and interactive
+  container shell.
+* ✅ Published TCP from an ephemeral FKN relay port into the DHCP-addressed
+  guest, including a browser HTTP request to an image-defined service.
+* ✅ Responsive playground and runtime layouts at desktop and mobile widths.
 * ⚠️ **Building a container image** with `c2w` needs Docker, and the build clones
   emulator/runc sources over TLS; in network-restricted/TLS-intercepting
   sandboxes those clones fail. Build the image where outbound TLS is unrestricted.
@@ -196,7 +226,7 @@ Known rough edges / TODO:
 
 * **Throughput.** Full CPU emulation + a JS-side TCP/IP stack is far heavier than
   libtorrent's native-Asio port. Don't expect line rate.
-* **recv latency.** Blocking reads poll on a `pollInterval` (2 ms) timer rather
+* **recv latency.** Blocking reads poll on a `pollInterval` (20 ms) timer rather
   than blocking efficiently on the main thread. A `recv-is-readable`-style
   timeout notify (as upstream uses for the guest socket) would cut idle latency
   and CPU; see `webvpn.go`'s `Read`.
@@ -204,5 +234,5 @@ Known rough edges / TODO:
   `udp4`.
 * **TCP DNS.** Only UDP `:53` is forwarded; large/truncated responses needing TCP
   fallback aren't handled yet.
-* **listen/inbound.** Egress only. The guest can't accept inbound connections
-  from the outside (there's no public ingress in this model).
+* **Published protocols.** Inbound publication currently supports TCP only.
+  UDP remains outbound-only.

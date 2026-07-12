@@ -65,13 +65,16 @@ func (n *Network) forwardTCPIngress(parent context.Context, incoming IngressConn
 		return
 	}
 
-	guest, err := gonet.DialContextTCP(parent, n.stack, tcpip.FullAddress{
+	dialCtx, cancelDial := context.WithTimeout(parent, 10*time.Second)
+	guest, err := gonet.DialContextTCP(dialCtx, n.stack, tcpip.FullAddress{
 		NIC:  nicID,
 		Addr: tcpip.AddrFrom4Slice(guestIP),
 		Port: incoming.GuestPort,
 	}, ipv4.ProtocolNumber)
+	cancelDial()
 	if err != nil {
 		incoming.Conn.Close()
+		log.Printf("ingress dial guest %s:%d failed: %v", net.IP(guestIP).String(), incoming.GuestPort, err)
 		return
 	}
 	proxyTCP(parent, incoming.Conn, guest)

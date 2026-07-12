@@ -51,13 +51,13 @@
         <aside class="runtime-rail">
           <div>
             <p class="rail-label">Execution trace</p>
-            <h1>Dockerfile<br>to shell</h1>
+            <h1>Dockerfile<br><span id="runtime-trace-target">to shell</span></h1>
           </div>
           <ol class="runtime-stages">
             <li class="is-active" data-runtime-stage="0"><span>01</span><div><strong>Boot guest</strong><small>Linux in WebAssembly</small></div></li>
             <li data-runtime-stage="1"><span>02</span><div><strong>Pull image</strong><small>OCI through FKN</small></div></li>
             <li data-runtime-stage="2"><span>03</span><div><strong>Build layers</strong><small>Buildah in the guest</small></div></li>
-            <li data-runtime-stage="3"><span>04</span><div><strong>Open shell</strong><small>Interactive container</small></div></li>
+            <li data-runtime-stage="3"><span>04</span><div><strong id="runtime-final-title">Open shell</strong><small id="runtime-final-copy">Interactive container</small></div></li>
           </ol>
           <div class="rail-note">
             <span>Local workload</span>
@@ -71,6 +71,17 @@
             <span>container-session / tty0</span>
             <div class="runtime-progress" aria-hidden="true"><i id="runtime-progress"></i></div>
           </div>
+          <section id="service-panel" class="service-panel" aria-label="Published HTTP service" hidden>
+            <div class="service-endpoint">
+              <span>Published TCP route</span>
+              <strong id="service-endpoint">Binding FKN relay port</strong>
+            </div>
+            <div class="service-result">
+              <span>Browser request</span>
+              <output id="service-result">Waiting for the image build</output>
+            </div>
+            <button id="service-probe" type="button" disabled>GET / through FKN</button>
+          </section>
           <div id="terminal"></div>
         </section>
       </main>

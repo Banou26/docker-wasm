@@ -429,6 +429,54 @@ main {
   font-size: 11px;
 }
 
+.mode-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.mode-picker > span,
+.mode-picker > small {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.mode-picker > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.mode-picker button {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.mode-picker button + button {
+  border-left: 0;
+}
+
+.mode-picker button.is-active {
+  background: var(--blue);
+  color: var(--white);
+}
+
+.mode-picker > small {
+  min-height: 27px;
+  color: rgb(17 18 15 / 65%);
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 #run-btn {
   width: 100%;
   min-height: 58px;
@@ -587,6 +635,7 @@ a:focus-visible {
   }
 
   .launch-pane > div:first-child,
+  .mode-picker,
   .launch-note {
     grid-column: 1 / -1;
   }
