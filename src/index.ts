@@ -5,7 +5,7 @@
 // drives it from the main thread.
 
 export { newStack } from './stack'
-export type { Netstack, ImageCache, ImageCacheEntry, PublishedTCPPort } from './webvpn-netstack'
+export type { Netstack, ImageCache, ImageCacheEntry, VirtualTCPPort } from './webvpn-netstack'
 export { createWebvpnNetstack } from './webvpn-netstack'
 export { pullImage, parseRef, dockerfileFromRefs } from './registry'
 export type { Platform, PullOptions } from './registry'

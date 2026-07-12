@@ -24,7 +24,7 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │         │   buildah pull docker-archive:/tmp/<ref>.tar                        │
 │         │   buildah bud --pull=never -t userimg .                             │
 │         │   shell: buildah run --tty "$ctr" /bin/sh                          │
-│         │   service: run image command + publish guest TCP through FKN        │
+│         │   service: run image command + map FKN virtual TCP into guest       │
 │         ▼                                                                     │
 │  netstack proxy serves the pulled tar bytes at gateway:9090 via two          │
 │  wasmimports (webvpn_image_size + webvpn_image_chunk) into a JS-side cache.  │
@@ -32,8 +32,8 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 ```
 
 Build state stays in the browser. Registry requests and guest TCP/UDP flows are
-carried by `@fkn/lib`; published service requests use the same transport in the
-opposite direction.
+carried by `@fkn/lib`. Service requests pair with an FKN loopback listener in
+the shared in-process data plane, then enter the guest through gVisor.
 
 ## Prereqs
 
@@ -70,7 +70,7 @@ immediately. Once Bochs boots, the auto-paste downloads the bytes from the
 netstack proxy's gateway:9090 HTTP server and imports them with
 `buildah pull docker-archive:`. It then runs the user's Dockerfile. Shell mode
 opens `/bin/sh`. HTTP service mode starts the image command, waits for guest port
-8080, and requests the service through the published FKN TCP route.
+8080, and requests the service through an in-process FKN virtual TCP port.
 
 ## What works today
 
@@ -87,9 +87,9 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
   arbitrary TCP/UDP for `RUN apk add …` etc.
 * ✅ **Interactive shell**: both Ghostty terminal buffers are rendered and the
   final container prompt accepts input.
-* ✅ **Published HTTP service**: `publish=tcp:8080` opens an ephemeral FKN TCP
-  listener, gVisor reverse-dials the guest DHCP lease, and the browser receives
-  the image's HTML response.
+* ✅ **Virtual HTTP service**: `publish=tcp:8080` opens an FKN loopback listener,
+  `@fkn/lib/http` connects through the in-process data plane, gVisor dials the
+  guest DHCP lease, and the browser receives the image's HTML response.
 * ✅ **Responsive UI**: the workbench and runtime are validated at desktop and
   mobile widths.
 
@@ -98,10 +98,13 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
 * Bochs emulation is slow; the build is on the order of minutes for a simple
   `FROM alpine; CMD …`. Most of the time is spent copying the layer through
   vfs storage; future work: a smarter storage driver or larger guest RAM.
+* The generated launch script must stay chunked across PTY writes. A single
+  large paste truncates around the terminal input limit before the here-doc
+  delimiter arrives.
 * The base64 hash payload caps at the URL length the browser allows (a few
   kilobytes in practice). Larger Dockerfiles or contexts would need a
   different transport.
-* Published routes currently support TCP only and close with the page.
+* Virtual guest routes currently support TCP only and close with the page.
 
 ## Why no backend
 

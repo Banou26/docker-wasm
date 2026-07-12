@@ -67,13 +67,14 @@ export type Netstack = {
   // async handlers, or `false` to delegate. Caller is responsible for the
   // Atomics notify after the (possibly-async) write completes.
   handle: (req: NetstackRequest, sab: SAB) => boolean | Promise<void>
-  publishTCP: (guestPort: number) => Promise<PublishedTCPPort>
+  listenTCP: (guestPort: number) => Promise<VirtualTCPPort>
   close: () => Promise<void>
 }
 
-export type PublishedTCPPort = {
+export type VirtualTCPPort = {
   guestPort: number
-  relayPort: number
+  virtualHost: string
+  virtualPort: number
   close: () => Promise<void>
 }
 
@@ -85,7 +86,7 @@ const TCP_BUFFER_HIGH_WATER = 4 * 1_024 * 1_024
 const TCP_INGRESS_HIGH_WATER = 256 * 1_024
 const MAX_INGRESS_CONNECTIONS = 32
 
-type TCPPublication = { close: () => Promise<void> }
+type TCPListener = { close: () => Promise<void> }
 
 export const createWebvpnNetstack = (host: {
   imageCache: ImageCache
@@ -93,7 +94,7 @@ export const createWebvpnNetstack = (host: {
   const sockets = new Map<number, SocketState>()
   const ingress: Array<{ id: number; guestPort: number }> = []
   const ingressSocketIds = new Set<number>()
-  const publications = new Set<TCPPublication>()
+  const listeners = new Set<TCPListener>()
   let closed = false
   let closePromise: Promise<void> | null = null
   let nextId = 1
@@ -213,7 +214,7 @@ export const createWebvpnNetstack = (host: {
     ingressSocketIds.delete(id)
   }
 
-  const publishTCP = (guestPort: number): Promise<PublishedTCPPort> => {
+  const listenTCP = (guestPort: number): Promise<VirtualTCPPort> => {
     if (closed) return Promise.reject(new Error('webvpn netstack is closed'))
     if (!Number.isInteger(guestPort) || guestPort < 1 || guestPort > 65535) {
       return Promise.reject(new Error('guest TCP port must be between 1 and 65535'))
@@ -221,7 +222,7 @@ export const createWebvpnNetstack = (host: {
 
     return new Promise((resolve, reject) => {
       let bindState: 'pending' | 'bound' | 'failed' = 'pending'
-      let publishSettled = false
+      let listenSettled = false
       let closing = false
       let closePromise: Promise<void> | null = null
       let resolveBound!: () => void
@@ -246,7 +247,7 @@ export const createWebvpnNetstack = (host: {
           sock.destroy()
         }
       })
-      const publication: TCPPublication = {
+      const listener: TCPListener = {
         close: () => {
           if (closePromise) return closePromise
           closing = true
@@ -260,35 +261,35 @@ export const createWebvpnNetstack = (host: {
             .catch((error) => {
               if (bindState !== 'failed') throw error
             })
-            .finally(() => publications.delete(publication))
+            .finally(() => listeners.delete(listener))
           return closePromise
         },
       }
-      publications.add(publication)
+      listeners.add(listener)
       server.on('error', (error) => {
         if (bindState === 'pending') {
           bindState = 'failed'
           rejectBound(error)
-          publications.delete(publication)
-          if (!publishSettled) {
-            publishSettled = true
+          listeners.delete(listener)
+          if (!listenSettled) {
+            listenSettled = true
             reject(error)
           }
           return
         }
-        console.log('[webvpn] tcp publication failed: ' + error)
+        console.log('[webvpn] virtual tcp listener failed: ' + error)
       })
-      server.listen(0, () => {
+      server.listen(0, '127.0.0.1', () => {
         if (bindState !== 'pending') return
         const address = server.address()
         if (!address || typeof address === 'string' || !address.port) {
-          const error = new Error('FKN did not return a TCP relay port')
+          const error = new Error('FKN did not return a virtual TCP port')
           bindState = 'failed'
           rejectBound(error)
-          publications.delete(publication)
+          listeners.delete(listener)
           server.close()
-          if (!publishSettled) {
-            publishSettled = true
+          if (!listenSettled) {
+            listenSettled = true
             reject(error)
           }
           return
@@ -296,14 +297,19 @@ export const createWebvpnNetstack = (host: {
         bindState = 'bound'
         resolveBound()
         if (closing) {
-          if (!publishSettled) {
-            publishSettled = true
-            reject(new Error('TCP publication closed before it became ready'))
+          if (!listenSettled) {
+            listenSettled = true
+            reject(new Error('virtual TCP listener closed before it became ready'))
           }
           return
         }
-        publishSettled = true
-        resolve({ guestPort, relayPort: address.port, close: publication.close })
+        listenSettled = true
+        resolve({
+          guestPort,
+          virtualHost: address.address,
+          virtualPort: address.port,
+          close: listener.close,
+        })
       })
     })
   }
@@ -313,7 +319,7 @@ export const createWebvpnNetstack = (host: {
     closed = true
     closePromise = (async () => {
       const results = await Promise.allSettled(
-        Array.from(publications, (publication) => publication.close()),
+        Array.from(listeners, (listener) => listener.close()),
       )
       for (const id of sockets.keys()) closeSocket(id)
       const failure = results.find((result) => result.status === 'rejected')
@@ -485,7 +491,7 @@ export const createWebvpnNetstack = (host: {
           return false
       }
     },
-    publishTCP,
+    listenTCP,
     close,
   }
 }

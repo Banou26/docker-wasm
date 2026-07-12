@@ -21,12 +21,16 @@ RUN apk add --no-cache curl
 
 CMD ["/bin/sh"]`
 
+const HTTP_BODY = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Inside the container</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#11120f;color:#f3f0e8;font:18px system-ui}main{max-width:38rem;padding:3rem;border:1px solid #bdff38}b{color:#bdff38;font:700 12px monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:clamp(2.5rem,8vw,5rem);line-height:.9;letter-spacing:-.06em}p{line-height:1.6}</style><main><b>FKN Container Lab</b><h1>Hello from inside the image.</h1><p>This HTTP response crossed an FKN TCP route into a Linux guest running in this browser tab.</p></main></html>'
+const HTTP_RESPONSE_COMMAND = `printf 'HTTP/1.0 200 OK\\r\\nContent-Type: text/html; charset=utf-8\\r\\nContent-Length: ${new TextEncoder().encode(HTTP_BODY).byteLength}\\r\\nConnection: close\\r\\n\\r\\n${HTTP_BODY}'`
+  .replace(/[\\"$`]/g, '\\$&')
+
 const HTTP_DOCKERFILE = `FROM alpine:3.19
 
-RUN mkdir -p /www && printf '%s\\n' '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Inside the container</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#11120f;color:#f3f0e8;font:18px system-ui}main{max-width:38rem;padding:3rem;border:1px solid #bdff38}b{color:#bdff38;font:700 12px monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:clamp(2.5rem,8vw,5rem);line-height:.9;letter-spacing:-.06em}p{line-height:1.6}</style><main><b>FKN Container Lab</b><h1>Hello from inside the image.</h1><p>This HTTP response crossed an FKN TCP route into a Linux guest running in this browser tab.</p></main></html>' > /www/index.html
+RUN mkdir -p /www && printf '%s\\n' '#!/bin/sh' "${HTTP_RESPONSE_COMMAND}" > /www/serve && chmod +x /www/serve
 
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "while true; do { size=$(wc -c < /www/index.html); printf 'HTTP/1.1 200 OK\\\\r\\\\nContent-Type: text/html; charset=utf-8\\\\r\\\\nContent-Length: %s\\\\r\\\\nConnection: close\\\\r\\\\n\\\\r\\\\n' $size; cat /www/index.html; } | /bin/busybox nc -l -p 8080; done"]`
+CMD ["/bin/busybox", "nc", "-lk", "-p", "8080", "-e", "/www/serve"]`
 
 let demoMode: DemoMode = 'shell'
 
@@ -54,12 +58,12 @@ const selectDemoMode = (mode: DemoMode): void => {
   const service = mode === 'http'
   pasteBox.value = service ? HTTP_DOCKERFILE : SHELL_DOCKERFILE
   flightTitle.textContent = service ? 'From source to service.' : 'From source to shell.'
-  finalStageTitle.textContent = service ? 'Publish' : 'Open'
-  finalStageCopy.textContent = service ? 'Browser request into guest :8080' : 'Your container shell'
+  finalStageTitle.textContent = service ? 'Connect' : 'Open'
+  finalStageCopy.textContent = service ? 'In-process request into guest :8080' : 'Your container shell'
   modeCopy.textContent = service
-    ? 'Run the image command and publish guest port 8080 through FKN.'
+    ? 'Run the image command behind an in-process FKN virtual port.'
     : 'Build the image, then work inside its shell.'
-  runLabel.textContent = service ? 'Build and publish service' : 'Boot this Dockerfile'
+  runLabel.textContent = service ? 'Build and connect service' : 'Boot this Dockerfile'
   for (const button of modeButtons) {
     const active = button.dataset.demoMode === mode
     button.classList.toggle('is-active', active)

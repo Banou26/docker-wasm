@@ -20,7 +20,7 @@ import {
   OPOST,
   ECHO, ECHONL, ICANON, ISIG, IEXTEN,
 } from 'xterm-pty'
-import type { ImageCache, Netstack, PublishedTCPPort } from './webvpn-netstack'
+import type { ImageCache, Netstack, VirtualTCPPort } from './webvpn-netstack'
 import type { NetMode } from './shared'
 
 import { newStack } from './stack'
@@ -34,7 +34,6 @@ declare const delegate: (worker: Worker, image: string, address: string) => (msg
 let currentRuntimeStage = 0
 let runtimeFailed = false
 let closeRuntimeResources: (() => void) | null = null
-const FKN_RELAY_HOST = 'webvpn.fkn.app'
 
 type PublishSpec = { guestPort: number }
 
@@ -49,7 +48,10 @@ const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
   return { guestPort }
 }
 
-const requestPublishedHTTP = async (relayPort: number): Promise<{ status: number; body: string }> => {
+const requestVirtualHTTP = async (
+  virtualHost: string,
+  virtualPort: number,
+): Promise<{ status: number; body: string }> => {
   const { request } = await import('@fkn/lib/http')
   return new Promise((resolve, reject) => {
     let settled = false
@@ -62,8 +64,8 @@ const requestPublishedHTTP = async (relayPort: number): Promise<{ status: number
     }
     const req = request({
       protocol: 'http:',
-      hostname: FKN_RELAY_HOST,
-      port: relayPort,
+      hostname: virtualHost,
+      port: virtualPort,
       path: '/',
       method: 'GET',
       headers: { Connection: 'close' },
@@ -146,7 +148,7 @@ const main = async () => {
   const serviceMode = publishSpec !== null && runImageDefault
   const netParam = getNetParam()
   if (publishSpec && netParam?.mode !== 'webvpn') {
-    throw new Error('published guest ports require ?net=webvpn')
+    throw new Error('virtual guest ports require ?net=webvpn')
   }
   const dockerfileMatch = location.hash.match(new RegExp('(?:^#|&)' + HASH_KEY_DOCKERFILE + '=([^&]+)'))
   let dockerfileB64: string | null = null
@@ -160,7 +162,7 @@ const main = async () => {
     }
   }
   if (serviceMode && dockerfileText === null) {
-    throw new Error('published service mode requires a Dockerfile')
+    throw new Error('virtual service mode requires a Dockerfile')
   }
 
   setRuntimeStage(0, 'Loading terminal runtime')
@@ -231,7 +233,7 @@ const main = async () => {
   if (serviceMode) {
     document.getElementById('runtime-trace-target')!.textContent = 'to service'
     document.getElementById('runtime-final-title')!.textContent = 'Run service'
-    document.getElementById('runtime-final-copy')!.textContent = 'HTTP through published TCP'
+    document.getElementById('runtime-final-copy')!.textContent = 'HTTP through virtual TCP'
     const servicePanel = document.getElementById('service-panel')!
     servicePanel.hidden = false
     servicePanel.closest('.terminal-frame')?.classList.add('has-service')
@@ -266,49 +268,49 @@ const main = async () => {
   closeRuntimeResources = closeWebvpn
   addEventListener('pagehide', closeWebvpn, { once: true })
 
-  let publicationPromise: Promise<PublishedTCPPort> | null = null
+  let virtualPortPromise: Promise<VirtualTCPPort> | null = null
   let probeInFlight = false
   const serviceEndpoint = document.getElementById('service-endpoint')
   const serviceResult = document.getElementById('service-result') as HTMLOutputElement | null
   const serviceProbe = document.getElementById('service-probe') as HTMLButtonElement | null
-  const closePublication = (): void => {
-    if (publicationPromise) void publicationPromise.then((publication) => publication.close()).catch(() => {})
+  const closeVirtualPort = (): void => {
+    if (virtualPortPromise) void virtualPortPromise.then((virtualPort) => virtualPort.close()).catch(() => {})
   }
 
   if (publishSpec) {
     const netstack = ensureWebvpn()
     if (!netstack) throw new Error('FKN netstack is unavailable')
-    publicationPromise = netstack.publishTCP(publishSpec.guestPort).then((publication) => {
+    virtualPortPromise = netstack.listenTCP(publishSpec.guestPort).then((virtualPort) => {
       if (serviceEndpoint) {
-        serviceEndpoint.textContent = FKN_RELAY_HOST + ':' + publication.relayPort +
-          ' -> guest :' + publication.guestPort
+        serviceEndpoint.textContent = virtualPort.virtualHost + ':' + virtualPort.virtualPort +
+          ' -> guest :' + virtualPort.guestPort
       }
-      return publication
+      return virtualPort
     }).catch((error) => {
-      if (serviceResult) serviceResult.textContent = 'Port publication failed: ' + error
-      setRuntimeStage(currentRuntimeStage, 'Port publication failed', 'error')
+      if (serviceResult) serviceResult.textContent = 'Virtual listener failed: ' + error
+      setRuntimeStage(currentRuntimeStage, 'Virtual listener failed', 'error')
       throw error
     })
-    await publicationPromise
+    await virtualPortPromise
   }
 
   const worker = new Worker('/worker.js' + location.search)
 
   const probeService = async (retry: boolean): Promise<void> => {
-    if (!publicationPromise || !serviceResult || !serviceProbe || probeInFlight) return
+    if (!virtualPortPromise || !serviceResult || !serviceProbe || probeInFlight) return
     probeInFlight = true
     serviceProbe.disabled = true
     let lastError: unknown = new Error('service did not respond')
     try {
-      const publication = await publicationPromise
+      const virtualPort = await virtualPortPromise
       const attempts = retry ? 8 : 1
       for (let attempt = 0; attempt < attempts; attempt++) {
         try {
           serviceResult.textContent = attempt === 0 ? 'Sending GET /' : 'Waiting for guest service, retry ' + attempt
-          const response = await requestPublishedHTTP(publication.relayPort)
+          const response = await requestVirtualHTTP(virtualPort.virtualHost, virtualPort.virtualPort)
           const preview = response.body.replace(/\s+/g, ' ').trim().slice(0, 120)
           serviceResult.textContent = response.status + ' / ' + (preview || 'empty response body')
-          setRuntimeStage(3, 'HTTP service reachable through FKN')
+          setRuntimeStage(3, 'HTTP service reachable through FKN in-process')
           return
         } catch (error) {
           lastError = error
@@ -402,7 +404,7 @@ const main = async () => {
       readyRefs++
       if (readyRefs === refs.length) setRuntimeStage(1, 'Base image ready, Linux booting')
     }, (error) => {
-      closePublication()
+      closeVirtualPort()
       setRuntimeStage(1, 'Image pull failed: ' + error, 'error')
     })
   }
@@ -446,7 +448,7 @@ const main = async () => {
       '  (\n' +
       '    attempt=0\n' +
       '    deadline=$(($(date +%s) + 60))\n' +
-      '    until printf \'GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\' | /bin/busybox nc -w 2 127.0.0.1 ' + publishSpec.guestPort + ' 2>/dev/null | /bin/busybox head -n 1 | /bin/busybox grep -Eq \'^HTTP/[0-9]+\\.[0-9]+ [0-9][0-9][0-9]([[:space:]]|$)\'; do\n' +
+      '    until { printf \'GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\'; sleep 1; } | /bin/busybox nc -w 2 127.0.0.1 ' + publishSpec.guestPort + ' 2>/dev/null | /bin/busybox head -n 1 | /bin/busybox grep -Eq \'^HTTP/[0-9]+\\.[0-9]+ [0-9][0-9][0-9]([[:space:]]|$)\'; do\n' +
       '      attempt=$((attempt + 1))\n' +
       '      if [ $((attempt % 10)) -eq 0 ]; then echo "waiting for guest service ($attempt attempts)"; fi\n' +
       '      if [ "$(date +%s)" -ge "$deadline" ]; then\n' +
@@ -482,13 +484,19 @@ const main = async () => {
   // Wait for the shell to print a "# " prompt before pasting; ghostty-web's
   // buffer matches xterm.js's (baseY + cursorY → row index; getLine().translateToString()).
   let sent = false
+  const pasteScript = async (): Promise<void> => {
+    for (let offset = 0; offset < script.length; offset += 512) {
+      xterm.paste(script.slice(offset, offset + 512))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
   const tryFeed = () => {
     if (sent) return
     const last = terminalTail(2).trimEnd()
     if (!/# *$/.test(last)) return
     sent = true
     setRuntimeStage(2, 'Building Dockerfile in Linux')
-    xterm.paste(script)
+    void pasteScript()
   }
   const iv = setInterval(() => { tryFeed(); if (sent) clearInterval(iv) }, 1000)
   let serviceProbeStarted = false
@@ -496,7 +504,7 @@ const main = async () => {
     const output = terminalTail(80).trimEnd()
     if (runtimeMarkers.buildFailed || runtimeMarkers.serviceFailed) {
       clearInterval(buildTimer)
-      closePublication()
+      closeVirtualPort()
       if (runtimeMarkers.serviceFailed && serviceResult) {
         serviceResult.textContent = serviceProbeStarted
           ? 'The image service exited'
@@ -512,7 +520,7 @@ const main = async () => {
     if (!runtimeMarkers.buildOk) return
     if (serviceMode) {
       if (serviceProbeStarted) return
-      setRuntimeStage(3, 'Starting published HTTP service')
+      setRuntimeStage(3, 'Starting virtual HTTP service')
       if (serviceResult) serviceResult.textContent = 'Waiting for guest service on :' + publishSpec?.guestPort
       if (!runtimeMarkers.serviceReady) return
       if (serviceProbe) serviceProbe.disabled = false

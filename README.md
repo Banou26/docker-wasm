@@ -1,7 +1,7 @@
 # c2w-webvpn: real TCP/UDP egress for container2wasm, in the browser
 
 Run **any Docker image** in the browser (via [container2wasm](https://github.com/ktock/container2wasm))
-with TCP/UDP egress and published inbound TCP routes. Guest traffic is carried
+with TCP/UDP egress and in-process TCP routes. Guest traffic is carried
 through [`@fkn/lib`](https://www.npmjs.com/package/@fkn/lib), the same FKN
 transport used by WASM-compiled libtorrent.
 
@@ -44,10 +44,11 @@ The only thing this project changes vs. stock container2wasm is the forwarder's
 (emulation, QEMU framing, DHCP, ARP, the gVisor TCP/IP termination) is reused
 unchanged.
 
-Published TCP runs the same path in reverse. The main thread opens an FKN TCP
-listener, accepted sockets cross the SharedArrayBuffer ABI, and the gVisor stack
-dials the guest's DHCP lease and requested port. Publications are scoped to the
-page lifecycle and allow up to 32 active inbound sockets.
+Virtual TCP runs the same path in reverse. The main thread opens an FKN loopback
+listener, and `@fkn/lib/http` dials its virtual port. FKN pairs the streams in
+the shared in-process data plane, then the accepted socket crosses the
+SharedArrayBuffer ABI and gVisor dials the guest's DHCP lease and requested
+port. Routes are scoped to the page lifecycle and allow up to 32 active sockets.
 
 ### The egress seam
 
@@ -58,7 +59,7 @@ page lifecycle and allow up to 32 active inbound sockets.
   (the guest's resolver is pointed at the gateway by DHCP). The dial is a
   parameter, not a hard dependency: the wasm build injects FKN sockets, the
   test injects `net.Dial`.
-  It also forwards published TCP sockets into the guest.
+  It also forwards FKN virtual TCP sockets into the guest.
 * `src/proxy/main.go` - the thin wasip1 entrypoint: wires the FKN dialer
   into the netstack, finds the emulator socket among the WASI preopens, and
   serves.
@@ -74,7 +75,7 @@ page lifecycle and allow up to 32 active inbound sockets.
   stream protocol (identical mechanism to upstream's `http_send`). This stays
   plain JS because it's `importScripts()`'d into the c2w stack worker.
 * `src/webvpn-netstack.ts`: **main-thread side.** Owns the `@fkn/lib` sockets,
-  TCP publications, and per-socket ring buffers serviced on each worker
+  virtual TCP listeners, and per-socket ring buffers serviced on each worker
   round-trip. Ports the copy-on-receive discipline from `library_fkn.js`.
 
 ## Build
@@ -96,13 +97,20 @@ demo. It supports two launches:
 
 * **Shell** builds the Dockerfile and opens `/bin/sh` in the resulting image.
 * **HTTP service** builds a dependency-free Alpine image, runs its default
-  command, publishes guest TCP port 8080, and sends `GET /` from the browser
-  through the returned FKN relay port.
+  command, maps guest TCP port 8080 to an FKN virtual port, and sends `GET /`
+  through the in-process FKN HTTP path.
 
-The service launch uses `?publish=tcp:8080&run=default`. `publish` starts the
-FKN listener and reverse gVisor dial. `run=default` combines the image entrypoint
-and command instead of replacing them with `/bin/sh`. The runtime waits for a
-guest-local HTTP response before starting the browser probe.
+The service launch uses `?publish=tcp:8080&run=default`. `publish` binds an FKN
+loopback listener and maps accepted sockets into the guest. `run=default`
+combines the image entrypoint and command instead of replacing them with
+`/bin/sh`. The runtime waits for a guest-local HTTP response before starting an
+`@fkn/lib/http` request to the returned virtual port.
+
+The launcher streams its generated build script into the guest PTY in 512-byte
+chunks; one large terminal paste can truncate a long Dockerfile payload. The
+dependency-free HTTP preset uses BusyBox `nc -lk` and emits each complete framed
+response from one shell-builtin `printf`, which keeps repeated requests stable
+inside the nested runtime.
 
 ```sh
 npm install
@@ -215,8 +223,8 @@ This is a working browser capability demo. Verified behavior includes:
 * ✅ Full browser boot with the real emulator, SharedArrayBuffer bridge, hosted
   FKN transport, live Docker Hub image pull, Buildah build, and interactive
   container shell.
-* ✅ Published TCP from an ephemeral FKN relay port into the DHCP-addressed
-  guest, including a browser HTTP request to an image-defined service.
+* ✅ In-process FKN virtual TCP into the DHCP-addressed guest, including a
+  browser HTTP request to an image-defined service without a relay hairpin.
 * ✅ Responsive playground and runtime layouts at desktop and mobile widths.
 * ⚠️ **Building a container image** with `c2w` needs Docker, and the build clones
   emulator/runc sources over TLS; in network-restricted/TLS-intercepting
@@ -234,5 +242,5 @@ Known rough edges / TODO:
   `udp4`.
 * **TCP DNS.** Only UDP `:53` is forwarded; large/truncated responses needing TCP
   fallback aren't handled yet.
-* **Published protocols.** Inbound publication currently supports TCP only.
-  UDP remains outbound-only.
+* **Virtual protocols.** Guest routing currently supports TCP only. UDP remains
+  outbound-only.
