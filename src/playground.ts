@@ -1,51 +1,92 @@
-// Drop a Dockerfile, encode into URL hash, navigate to the c2w-webvpn runtime
-// pointed at the prebuilt playground.wasm. No server-side build, no job ids -
-// "playground" is one static wasm.
-
 import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from './shared'
 
 const dropZone = document.getElementById('drop-zone')!
 const pasteBox = document.getElementById('paste-box') as HTMLTextAreaElement
 const runBtn = document.getElementById('run-btn') as HTMLButtonElement
+const fileInput = document.getElementById('file-input') as HTMLInputElement
+const editorMeta = document.getElementById('editor-meta')!
 const status = document.getElementById('status')!
 
-const setEnabled = (): void => { runBtn.disabled = !pasteBox.value.trim() }
-pasteBox.addEventListener('input', setEnabled)
+const countBaseImages = (source: string): number => {
+  const refs = new Set<string>()
+  for (const line of source.split('\n')) {
+    const match = line.trim().match(/^FROM\s+(?:--\S+\s+)*(\S+)/i)
+    const ref = match?.[1]
+    if (ref && ref.toLowerCase() !== 'scratch') refs.add(ref)
+  }
+  return refs.size
+}
 
-;(['dragenter', 'dragover'] as const).forEach((ev) =>
-  dropZone.addEventListener(ev, (e) => {
-    e.preventDefault(); e.stopPropagation()
-    dropZone.classList.add('dragover')
-  }))
-;(['dragleave', 'drop'] as const).forEach((ev) =>
-  dropZone.addEventListener(ev, (e) => {
-    e.preventDefault(); e.stopPropagation()
-    dropZone.classList.remove('dragover')
-  }))
+const updateEditor = (): void => {
+  const source = pasteBox.value.trim()
+  const lines = source ? source.split('\n').length : 0
+  const refs = source ? countBaseImages(source) : 0
+  runBtn.disabled = !source
+  editorMeta.textContent = lines + ' line' + (lines === 1 ? '' : 's') + ' / ' +
+    refs + ' base image' + (refs === 1 ? '' : 's')
+}
 
-dropZone.addEventListener('drop', async (e: DragEvent) => {
-  const file = e.dataTransfer?.files?.[0]
-  if (!file) return
+const loadFile = async (file: File): Promise<void> => {
   try {
     pasteBox.value = await file.text()
-    setEnabled()
-    status.textContent = 'loaded ' + file.name + ' (' + file.size + ' B)'
-    status.className = 'status'
-  } catch (err) {
-    status.textContent = 'failed to read file: ' + (err as Error).message
+    status.textContent = file.name + ' loaded'
+    status.className = 'status ok'
+    updateEditor()
+  } catch (error) {
+    status.textContent = 'Could not read file: ' + (error as Error).message
     status.className = 'status err'
   }
+}
+
+pasteBox.addEventListener('input', () => {
+  status.textContent = 'Edited locally'
+  status.className = 'status'
+  updateEditor()
 })
 
-runBtn.addEventListener('click', () => {
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files?.[0]
+  if (file) void loadFile(file)
+})
+
+;(['dragenter', 'dragover'] as const).forEach((eventName) => {
+  dropZone.addEventListener(eventName, (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dropZone.classList.add('dragover')
+  })
+})
+
+;(['dragleave', 'drop'] as const).forEach((eventName) => {
+  dropZone.addEventListener(eventName, (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dropZone.classList.remove('dragover')
+  })
+})
+
+dropZone.addEventListener('drop', (event: DragEvent) => {
+  const file = event.dataTransfer?.files?.[0]
+  if (file) void loadFile(file)
+})
+
+const run = (): void => {
   const dockerfile = pasteBox.value.trim()
   if (!dockerfile) return
-  const b64 = b64encodeUtf8(dockerfile)
+  runBtn.disabled = true
+  runBtn.setAttribute('aria-busy', 'true')
+  status.textContent = 'Opening runtime'
+  status.className = 'status ok'
   const url =
     '/?' + QUERY_PARAMS.net + '=webvpn' +
     '&' + QUERY_PARAMS.wasmUrl + '=/playground/playground.wasm' +
-    '#' + HASH_KEY_DOCKERFILE + '=' + b64
+    '#' + HASH_KEY_DOCKERFILE + '=' + b64encodeUtf8(dockerfile)
   location.assign(url)
+}
+
+runBtn.addEventListener('click', run)
+pasteBox.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') run()
 })
 
-setEnabled()
+updateEditor()

@@ -2,7 +2,7 @@
 //
 // Owns the real egress sockets. When the proxy worker asks to connect/send/recv
 // over a flow, those requests arrive here as postMessages and are serviced
-// against @webvpn/net (TCP) and @webvpn/dgram (UDP) sockets, with per-socket
+// against FKN TCP and UDP sockets, with per-socket
 // ring buffers filled asynchronously by @webvpn callbacks between the worker's
 // synchronous round-trips.
 //
@@ -10,8 +10,8 @@
 // into the SAB on demand) is ported from libtorrent's library_fkn.js, where
 // reusing @webvpn's backing buffers across reads caused silent corruption.
 
-import { connect as webvpnConnect } from '@webvpn/net'
-import * as webvpnDgram from '@webvpn/dgram'
+import * as webvpnDgram from '@fkn/lib/dgram'
+import { connect as webvpnConnect } from '@fkn/lib/net'
 
 type AnyTcpSocket = ReturnType<typeof webvpnConnect>
 type AnyUdpSocket = ReturnType<typeof webvpnDgram.createSocket>
@@ -21,6 +21,11 @@ type TcpState = {
   sock: AnyTcpSocket
   chunks: Uint8Array[]
   total: number
+  paused: boolean
+  writeBlocked: boolean
+  received: number
+  receiveCalls: number
+  largestChunk: number
   fin: boolean
   error: number
 }
@@ -67,6 +72,9 @@ export type Netstack = {
 // Worker requests image_size/chunk; we serve from cached bytes.
 export type ImageCache = Map<string, ImageCacheEntry>
 
+const TCP_BUFFER_HIGH_WATER = 4 * 1_024 * 1_024
+const TCP_BUFFER_LOW_WATER = TCP_BUFFER_HIGH_WATER / 2
+
 export const createWebvpnNetstack = (host: {
   imageCache: ImageCache
 }): Netstack => {
@@ -76,20 +84,43 @@ export const createWebvpnNetstack = (host: {
   const openTCP = (hostname: string, port: number): number => {
     const id = nextId++
     const sock = webvpnConnect({ host: hostname, port })
-    const st: TcpState = { kind: 'tcp', sock, chunks: [], total: 0, fin: false, error: 0 }
+    const st: TcpState = {
+      kind: 'tcp',
+      sock,
+      chunks: [],
+      total: 0,
+      paused: false,
+      writeBlocked: false,
+      received: 0,
+      receiveCalls: 0,
+      largestChunk: 0,
+      fin: false,
+      error: 0,
+    }
+    sockets.set(id, st)
     sock.on('data', (chunk: Uint8Array | ArrayBuffer) => {
-      // Copy: @webvpn's stream reader may reuse backing buffers between reads
-      // - stashing the original would let a later read overwrite undrained bytes.
       const src = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
       const copy = new Uint8Array(src.length)
       copy.set(src)
       st.chunks.push(copy)
       st.total += copy.length
+      st.largestChunk = Math.max(st.largestChunk, copy.length)
+      if (!st.paused && st.total >= TCP_BUFFER_HIGH_WATER) {
+        st.paused = true
+        sock.pause()
+      }
     })
-    sock.on('end',   () => { st.fin = true })
+    sock.on('connect', () => {
+      console.log('[webvpn] connected tcp ' + hostname + ':' + port + ' id=' + id)
+    })
+    sock.on('drain', () => { st.writeBlocked = false })
+    sock.on('end', () => { st.fin = true })
     sock.on('close', () => { st.fin = true })
-    sock.on('error', () => { st.error = 1; st.fin = true })
-    sockets.set(id, st)
+    sock.on('error', (error) => {
+      console.log('[webvpn] tcp ' + hostname + ':' + port + ' id=' + id + ' failed: ' + error)
+      st.error = 1
+      st.fin = true
+    })
     return id
   }
 
@@ -124,6 +155,10 @@ export const createWebvpnNetstack = (host: {
       st.total -= take
       off += take
     }
+    if (st.paused && st.total <= TCP_BUFFER_LOW_WATER) {
+      st.paused = false
+      st.sock.resume()
+    }
     return { bytes: out, eof: false }
   }
 
@@ -136,6 +171,10 @@ export const createWebvpnNetstack = (host: {
   const closeSocket = (id: number): void => {
     const st = sockets.get(id)
     if (!st) return
+    if (st.kind === 'tcp') {
+      console.log('[webvpn] close tcp id=' + id + ' received=' + st.received +
+        ' calls=' + st.receiveCalls + ' largest=' + st.largestChunk)
+    }
     try {
       if (st.kind === 'tcp') (st.sock as { destroy: () => void }).destroy()
       else (st.sock as { close: () => void }).close()
@@ -155,8 +194,8 @@ export const createWebvpnNetstack = (host: {
               ? openUDP(hostname, req.port)
               : openTCP(hostname, req.port)
             console.log('[webvpn] connect ' + proto + ' ' + hostname + ':' + req.port + ' -> id=' + streamStatus[0])
-          } catch (e) {
-            console.log('[webvpn] connect ' + proto + ' ' + hostname + ':' + req.port + ' FAILED: ' + e)
+          } catch (error) {
+            console.log('[webvpn] connect ' + proto + ' ' + hostname + ':' + req.port + ' FAILED: ' + error)
             streamStatus[0] = -1
           }
           return true
@@ -164,12 +203,27 @@ export const createWebvpnNetstack = (host: {
         case 'webvpn_send': {
           const st = sockets.get(req.id)
           if (!st) { streamStatus[0] = -1; return true }
+          if (st.error) { streamStatus[0] = -1; return true }
+          if (st.kind === 'tcp' && st.writeBlocked) {
+            streamStatus[0] = 0
+            return true
+          }
           try {
-            if (st.kind === 'tcp') (st.sock as { write: (b: Uint8Array) => void }).write(req.buf)
-            else (st.sock as { send: (b: Uint8Array, off: number, len: number, port: number, host: string) => void })
-              .send(req.buf, 0, req.buf.length, st.port, st.host)
+            if (st.kind === 'tcp') {
+              st.writeBlocked = !st.sock.write(req.buf, (error) => {
+                if (error) {
+                  console.log('[webvpn] tcp id=' + req.id + ' write failed: ' + error)
+                  st.error = 1
+                  st.fin = true
+                }
+              })
+            } else {
+              st.sock.send(req.buf, 0, req.buf.length, st.port, st.host, (error) => {
+                if (error) st.error = 1
+              })
+            }
             streamStatus[0] = req.buf.length
-          } catch (_e) {
+          } catch (_error) {
             streamStatus[0] = -1
           }
           return true
@@ -177,8 +231,17 @@ export const createWebvpnNetstack = (host: {
         case 'webvpn_recv': {
           const st = sockets.get(req.id)
           if (!st) { streamStatus[0] = -1; return true }
+          streamLen[0] = 0
+          if (st.error && (st.kind === 'udp' || st.total === 0)) {
+            streamStatus[0] = -1
+            return true
+          }
           const len = Math.min(req.len, streamData.byteLength)
           const out = st.kind === 'tcp' ? drainTCP(st, len) : drainUDP(st, len)
+          if (st.kind === 'tcp') {
+            st.receiveCalls++
+            st.received += out.bytes.length
+          }
           streamLen[0] = out.bytes.length
           if (out.bytes.length > 0) streamData.set(out.bytes, 0)
           streamStatus[0] = out.eof ? 1 : 0
@@ -226,12 +289,14 @@ export const createWebvpnNetstack = (host: {
           // headers so plain fetch works, skipping the slow per-query UDP path.
           return fetch('https://cloudflare-dns.com/dns-query', {
             method: 'POST',
+            signal: AbortSignal.timeout(10_000),
             headers: {
               'Content-Type': 'application/dns-message',
               Accept: 'application/dns-message',
             },
             body: req.query as BodyInit,
           }).then(async (r) => {
+            if (!r.ok) throw new Error('DoH returned ' + r.status)
             const bytes = new Uint8Array(await r.arrayBuffer())
             const n = Math.min(bytes.length, streamData.byteLength)
             streamData.set(bytes.subarray(0, n), 0)

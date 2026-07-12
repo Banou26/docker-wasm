@@ -51,10 +51,9 @@ You need a normal dev machine (Docker w/ network, Go ≥ 1.23, node, c2w).
 cd ~/dev/fkn/webvpn && ./target/release/webvpn &
 
 # fkn/web vite dev (the @fkn/lib RPC iframe target)
-CERT_HASH=$(curl -s http://localhost:4434/cert-hash)
 cd ~/dev/fkn/web
 VITE_WEBVPN_ORIGIN="https://localhost:4433" \
-VITE_WEBVPN_CERT_HASH="$CERT_HASH" \
+VITE_WEBVPN_CERT_HASH_URL="http://localhost:4434/cert-hash" \
 npx vite --port 1234 --host 127.0.0.1 &
 ```
 

@@ -1,15 +1,13 @@
 // In-browser Docker Registry V2 client + docker-archive (USTAR) assembler.
 //
-// Docker Hub doesn't send CORS headers, so we route through @fkn/lib's
-// serverProxyFetch - the page's /proxy endpoint speaks the fkn-proxy-*
-// protocol and pass-throughs to upstream registries.
+// Docker Hub doesn't send CORS headers, so requests use FKN cloud fetch.
 //
 // Result of pullImage() is a Uint8Array containing a docker-archive tar (the
 // format `docker save` writes; `buildah pull docker-archive:` reads), which
 // the runtime serves to the c2w-webvpn-proxy worker via a wasmimport so the
 // guest can wget it and feed it to buildah.
 
-import { serverProxyFetch } from '@fkn/lib'
+import { fetch as cloudFetch } from '@fkn/lib/cloud'
 
 export type Platform = { os: string; arch: string }
 
@@ -38,18 +36,19 @@ type ProxyFetchInit = {
 }
 
 const proxyFetch = async (url: string, opts: ProxyFetchInit = {}): Promise<FetchResult> => {
-  const r = await serverProxyFetch(url, {
+  const r = await cloudFetch(url, {
     method: opts.method || 'GET',
     headers: opts.headers,
     body: opts.body,
   })
   const headers: Record<string, string> = {}
   r.headers.forEach((v, k) => { headers[k.toLowerCase()] = v })
-  // serverProxyFetch loses Response.status when it rebuilds the Response;
-  // our /proxy shim smuggles the real upstream status through the headers
-  // envelope as x-upstream-status.
-  const statusHeader = headers['x-upstream-status']
-  const status = parseInt(statusHeader ?? String(r.status), 10)
+  const statusHeader = headers['x-upstream-status'] || headers['fkn-proxy-status']
+  const status = statusHeader
+    ? parseInt(statusHeader, 10)
+    : r.status === 200 && headers['www-authenticate']
+      ? 401
+      : r.status
   return { status, headers, body: r }
 }
 
@@ -103,6 +102,7 @@ const fetchToken = async (www: string, repository: string): Promise<string | nul
   const url = new URL(params.realm)
   if (params.service) url.searchParams.set('service', params.service)
   url.searchParams.set('scope', 'repository:' + repository + ':pull')
+  url.searchParams.set('_fkn', crypto.randomUUID())
   const { status, body } = await proxyFetch(url.toString())
   if (status !== 200) throw new Error('token endpoint returned ' + status)
   const j = await body.json()
@@ -118,6 +118,14 @@ const getWithAuth = async (url: string, repository: string, accept?: string): Pr
     headers.Authorization = 'Bearer ' + token
     r = await proxyFetch(url, { headers })
   }
+  let currentUrl = url
+  for (let redirects = 0; redirects < 5 && r.headers.location; redirects++) {
+    const nextUrl = new URL(r.headers.location, currentUrl).toString()
+    if (new URL(nextUrl).origin !== new URL(currentUrl).origin) delete headers.Authorization
+    currentUrl = nextUrl
+    r = await proxyFetch(currentUrl, { headers })
+  }
+  if (r.headers.location) throw new Error('too many redirects for ' + url)
   return r
 }
 

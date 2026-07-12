@@ -29,7 +29,10 @@ echo "==> 1/6  build the container image (alpine + curl + bind-tools)"
 docker build -t c2w-webvpn-alpine-curl "$imagedir"
 
 echo "==> 2/6  convert the image to wasm with c2w"
-c2w c2w-webvpn-alpine-curl "$public/out.wasm"
+c2w \
+    --build-arg SOURCE_REPO=https://github.com/container2wasm/container2wasm \
+    --build-arg SOURCE_REPO_VERSION=v0.8.4 \
+    c2w-webvpn-alpine-curl "$public/out.wasm"
 
 echo "==> 3/6  build the c2w-webvpn netstack proxy"
 ( cd "$repo" && make ) && cp "$repo/dist/c2w-webvpn-proxy.wasm" "$public/c2w-webvpn-proxy.wasm"

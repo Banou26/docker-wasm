@@ -130,7 +130,7 @@ const (
 	// block. Small enough to keep latency low, large enough not to spin the
 	// CPU. The main thread keeps filling buffers via @webvpn callbacks while
 	// we sleep.
-	pollInterval = 2 * time.Millisecond
+	pollInterval = 20 * time.Millisecond
 )
 
 var (

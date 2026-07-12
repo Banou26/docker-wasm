@@ -14,8 +14,10 @@
 package netstack
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -221,6 +223,58 @@ func TestDNSForwardThroughProxy(t *testing.T) {
 	t.Logf("DNS round-trip OK: guest -> gateway:53 -> dial -> upstream -> back (%d bytes, id=0xBEEF)", n)
 }
 
+func TestDNSResolveThroughProxy(t *testing.T) {
+	resolved := make(chan []byte, 1)
+	dialed := make(chan string, 1)
+	resolve := func(query []byte) ([]byte, error) {
+		resolved <- append([]byte(nil), query...)
+		resp := append([]byte(nil), query...)
+		resp[2] |= 0x80
+		return resp, nil
+	}
+	dial := func(_ string, address string) (net.Conn, error) {
+		dialed <- address
+		return nil, errors.New("unexpected DNS fallback")
+	}
+	guest := setupWithConfig(t, Config{Dial: dial, ResolveDNS: resolve})
+
+	conn, err := gonet.DialUDP(guest, nil, &tcpip.FullAddress{
+		NIC:  1,
+		Addr: tcpip.AddrFrom4Slice(net.ParseIP(GatewayIP).To4()),
+		Port: 53,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("guest dial gateway:53 failed: %v", err)
+	}
+	defer conn.Close()
+
+	query := []byte{
+		0xCA, 0xFE, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0,
+		0x00, 0x01, 0x00, 0x01,
+	}
+	if _, err := conn.Write(query); err != nil {
+		t.Fatalf("dns write: %v", err)
+	}
+	resp := make([]byte, 512)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := conn.Read(resp)
+	if err != nil {
+		t.Fatalf("dns read: %v", err)
+	}
+	if got := <-resolved; !bytes.Equal(got, query) {
+		t.Fatalf("resolver query mismatch: got % x want % x", got, query)
+	}
+	select {
+	case address := <-dialed:
+		t.Fatalf("unexpected DNS fallback dial to %s", address)
+	default:
+	}
+	if n < 4 || resp[0] != 0xCA || resp[1] != 0xFE || resp[2]&0x80 == 0 {
+		t.Fatalf("dns response mismatch: % x", resp[:min(n, 4)])
+	}
+}
+
 // setup builds the proxy network + a guest stack connected to it over a
 // QEMU-framed loopback connection, and returns the guest stack.
 func setup(t *testing.T, dial DialFunc) *stack.Stack {
@@ -228,6 +282,10 @@ func setup(t *testing.T, dial DialFunc) *stack.Stack {
 }
 
 func setupWithDNS(t *testing.T, dial DialFunc, upstreamDNS string) *stack.Stack {
+	return setupWithConfig(t, Config{Dial: dial, UpstreamDNS: upstreamDNS})
+}
+
+func setupWithConfig(t *testing.T, cfg Config) *stack.Stack {
 	t.Helper()
 
 	// loopback transport between guest and proxy (buffered, unlike net.Pipe).
@@ -250,7 +308,7 @@ func setupWithDNS(t *testing.T, dial DialFunc, upstreamDNS string) *stack.Stack 
 	proxyConn := <-accepted
 
 	// proxy: our netstack, egress via the supplied dial (stands in for @webvpn).
-	nw, err := New(Config{Dial: dial, UpstreamDNS: upstreamDNS})
+	nw, err := New(cfg)
 	if err != nil {
 		t.Fatalf("netstack.New: %v", err)
 	}

@@ -46,7 +46,9 @@ export default defineConfig({
       'node:util': 'util',
       'node:stream': 'stream-browserify',
       'node:process': 'process/browser',
+      process: 'process/browser',
       stream: 'stream-browserify',
+      util: 'util/',
     },
   },
   define: {

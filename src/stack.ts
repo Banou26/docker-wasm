@@ -7,11 +7,13 @@
 
 import type { Netstack, ImageCache } from './webvpn-netstack'
 
-type BufRef = { buf: Uint8Array }
+type BufRef = { buf: Uint8Array; wakeReadable: (() => void) | null }
 type CertBuf = { buf: Uint8Array; done: boolean }
 type Conn = { sendbuf: BufRef; recvbuf: BufRef }
 
 type WorkerHandler = (msg: MessageEvent) => void
+
+const STREAM_BUFFER_BYTES = 64 * 1024
 
 type HttpConn = {
   address: string
@@ -45,17 +47,17 @@ export const newStack = (
   stackImageName: string,
   netstack: () => Netstack | null,
 ): WorkerHandler => {
-  const p2vbuf: BufRef = { buf: new Uint8Array(0) }   // proxy -> vm
-  const v2pbuf: BufRef = { buf: new Uint8Array(0) }   // vm    -> proxy
+  const p2vbuf: BufRef = { buf: new Uint8Array(0), wakeReadable: null }   // proxy -> vm
+  const v2pbuf: BufRef = { buf: new Uint8Array(0), wakeReadable: null }   // vm    -> proxy
   const proxyConn: Conn = { sendbuf: p2vbuf, recvbuf: v2pbuf }
   const vmConn: Conn = { sendbuf: v2pbuf, recvbuf: p2vbuf }
 
-  const proxyShared = new SharedArrayBuffer(12 + 4096)
+  const proxyShared = new SharedArrayBuffer(12 + STREAM_BUFFER_BYTES)
   const certbuf: CertBuf = { buf: new Uint8Array(0), done: false }
   stackWorker.onmessage = connect('proxy', proxyShared, proxyConn, certbuf, netstack)
   stackWorker.postMessage({ type: 'init', buf: proxyShared, imagename: stackImageName })
 
-  const vmShared = new SharedArrayBuffer(12 + 4096)
+  const vmShared = new SharedArrayBuffer(12 + STREAM_BUFFER_BYTES)
   worker.postMessage({ type: 'init', buf: vmShared, imagename: workerImageName })
   return connect('vm', vmShared, vmConn, certbuf, netstack)
 }
@@ -78,6 +80,20 @@ const connect = (
   let curID = 0
   const maxID = 0x7FFFFFFF
   let timeoutHandler: ReturnType<typeof setTimeout> | null = null
+  let waitingReadable = false
+
+  recvbuf.wakeReadable = () => {
+    if (!waitingReadable) return
+    waitingReadable = false
+    if (timeoutHandler) {
+      clearTimeout(timeoutHandler)
+      timeoutHandler = null
+    }
+    streamData[0] = 1
+    streamStatus[0] = 0
+    Atomics.store(streamCtrl, 0, 1)
+    Atomics.notify(streamCtrl, 0)
+  }
 
   const getID = (): number => {
     const startID = curID
@@ -117,9 +133,13 @@ const connect = (
       }
       // handle() may be sync (returns true) or async (returns a Promise) -
       // async handlers do their own SAB writes; we notify when they settle.
-      Promise.resolve(w.handle(req_, { streamStatus, streamLen, streamData }))
-        .catch(() => { streamStatus[0] = -1 })
-        .then(() => {
+      Promise.resolve()
+        .then(async () => { await w.handle(req_, { streamStatus, streamLen, streamData }) })
+        .catch((error) => {
+          console.log(name + ': webvpn request failed: ' + error)
+          streamStatus[0] = -1
+        })
+        .finally(() => {
           Atomics.store(streamCtrl, 0, 1)
           Atomics.notify(streamCtrl, 0)
         })
@@ -135,6 +155,7 @@ const connect = (
       case 'send':
         if (!accepted) { console.log(name + ': cannot send to unaccepted socket'); streamStatus[0] = -1; break }
         sendbuf.buf = appendData(sendbuf.buf, req_.buf)
+        sendbuf.wakeReadable?.()
         streamStatus[0] = 0
         break
       case 'recv':
@@ -147,8 +168,10 @@ const connect = (
           streamData[0] = 1
         } else if (req_.timeout != undefined && req_.timeout > 0) {
           if (timeoutHandler) clearTimeout(timeoutHandler)
+          waitingReadable = true
           timeoutHandler = setTimeout(() => {
             if (timeoutHandler) { clearTimeout(timeoutHandler); timeoutHandler = null }
+            waitingReadable = false
             streamData[0] = recvbuf.buf.byteLength > 0 ? 1 : 0
             streamStatus[0] = 0
             Atomics.store(streamCtrl, 0, 1)

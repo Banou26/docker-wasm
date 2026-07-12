@@ -3,12 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>container + WASI on browser</title>
-    <style>
-      html, body { margin: 0; padding: 0; background: #000; height: 100%; width: 100%; overflow: hidden; }
-      #terminal { width: 100vw; height: 100vh; }
-      #terminal canvas { display: block; }
-    </style>
+    <meta name="description" content="A live Linux container build running inside the browser with FKN networking.">
+    <title>Container Runtime / FKN Lab</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/src/runtime.css">
     <!-- Classic inline script - runs BEFORE the module so the patch is in
          place when @fkn/lib's RPC iframe (to https://fkn.app/api or local
          override) is created. COEP=credentialless requires the embedded doc
@@ -31,11 +29,55 @@
       })();
     </script>
   </head>
-  <body>
-    <div id="terminal"></div>
+  <body class="runtime-page">
+    <div class="runtime-app">
+      <header class="runtime-header">
+        <a class="runtime-brand" href="/playground/" aria-label="Back to Container Lab">
+          <span>FKN</span>
+          <strong>Container Lab</strong>
+        </a>
+        <div class="session-title">
+          <i aria-hidden="true"></i>
+          <span id="runtime-state" aria-live="polite">Preparing browser runtime</span>
+        </div>
+        <div class="runtime-badges" aria-label="Runtime technologies">
+          <span>Linux x86</span>
+          <span>WASM</span>
+          <span>FKN network</span>
+        </div>
+      </header>
+
+      <main class="runtime-grid">
+        <aside class="runtime-rail">
+          <div>
+            <p class="rail-label">Execution trace</p>
+            <h1>Dockerfile<br>to shell</h1>
+          </div>
+          <ol class="runtime-stages">
+            <li class="is-active" data-runtime-stage="0"><span>01</span><div><strong>Boot guest</strong><small>Linux in WebAssembly</small></div></li>
+            <li data-runtime-stage="1"><span>02</span><div><strong>Pull image</strong><small>OCI through FKN</small></div></li>
+            <li data-runtime-stage="2"><span>03</span><div><strong>Build layers</strong><small>Buildah in the guest</small></div></li>
+            <li data-runtime-stage="3"><span>04</span><div><strong>Open shell</strong><small>Interactive container</small></div></li>
+          </ol>
+          <div class="rail-note">
+            <span>Local workload</span>
+            <p>The guest, build cache, and terminal stay in this tab.</p>
+          </div>
+        </aside>
+
+        <section class="terminal-frame" aria-label="Container terminal">
+          <div class="terminal-toolbar">
+            <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span>container-session / tty0</span>
+            <div class="runtime-progress" aria-hidden="true"><i id="runtime-progress"></i></div>
+          </div>
+          <div id="terminal"></div>
+        </section>
+      </main>
+    </div>
     <!-- ws-delegate.js (upstream c2w) is a classic script that defines
          globalThis.delegate for ?net=delegate mode. Load before the module. -->
     <script src="/ws-delegate.js"></script>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/bootstrap.ts"></script>
   </body>
 </html>

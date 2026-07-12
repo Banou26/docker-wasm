@@ -1,56 +1,113 @@
 <!doctype html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Dockerfile → wasm playground</title>
+    <meta name="description" content="Build a Dockerfile inside a browser tab with Linux, WebAssembly, Buildah, and FKN networking.">
+    <title>Container Lab by FKN</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/src/style.css">
-</head>
-<body>
-    <header>
-        <h1>Dockerfile → wasm</h1>
-        <p class="lede">
-            Drop a Dockerfile. <b>No backend.</b> The build runs inside an alpine+buildah
-            image c2w'd to wasm, in your browser tab, with network egress over
-            <code>@webvpn</code> through this repo's
-            <a href="https://github.com/Banou26/libtorrent/tree/claude/docker-wasm-networking-pUlRm">c2w-webvpn</a> netstack.
-        </p>
-    </header>
+  </head>
+  <body>
+    <div class="site-shell">
+      <nav class="topbar" aria-label="Primary navigation">
+        <a class="brand" href="https://fkn.app" aria-label="FKN home">
+          <span class="brand-mark">FKN</span>
+          <span class="brand-product">Container Lab</span>
+        </a>
+        <div class="topbar-meta">
+          <span class="pulse" aria-hidden="true"></span>
+          Browser runtime
+          <span class="topbar-index">LAB / 01</span>
+        </div>
+      </nav>
 
-    <main>
-        <section id="drop-zone" class="drop">
-            <div class="drop-hint">
-                <svg viewBox="0 0 24 24" width="42" height="42" aria-hidden="true">
-                    <path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
-                          d="M12 3 L12 15 M6 9 L12 3 L18 9 M4 18 L20 18 M4 20 L20 20"/>
-                </svg>
-                <p><b>Drop a Dockerfile here</b><br>
-                or paste its contents below.</p>
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div>
+            <p class="eyebrow">Linux, packed into a browser tab</p>
+            <h1 id="hero-title">Build the image.<br><em>Keep the shell.</em></h1>
+          </div>
+          <div class="hero-copy">
+            <p>Paste a Dockerfile. The tab boots Linux in WebAssembly, pulls the base image through FKN, builds it with Buildah, and hands you the resulting container.</p>
+            <div class="hero-facts" aria-label="Runtime facts">
+              <span><strong>0</strong> build servers</span>
+              <span><strong>1</strong> browser tab</span>
+              <span><strong>TCP + UDP</strong> via FKN</span>
             </div>
-            <textarea id="paste-box" placeholder="FROM alpine:3.19&#10;RUN apk add --no-cache curl&#10;CMD [&quot;/bin/sh&quot;]" spellcheck="false"></textarea>
-            <div class="actions">
-                <button id="run-btn" disabled>Open in browser →</button>
-                <span id="status" class="status"></span>
-            </div>
+          </div>
         </section>
 
-        <details>
-            <summary>How this works</summary>
-            <ol>
-                <li>Your Dockerfile is base64-encoded into the URL hash (<code>#dockerfile=…</code>); it never leaves the browser.</li>
-                <li>We navigate to the c2w-webvpn runtime page, pointing it at a single pre-built
-                    <code>playground.wasm</code> (≈150 MB, alpine + buildah, c2w'd once).</li>
-                <li>The wasm boots inside the browser. When the shell prompt appears, the page auto-types a build script:
-                    decode the Dockerfile from the hash, write to <code>/work/Dockerfile</code>, run
-                    <code>buildah --storage-driver vfs bud --isolation chroot</code>, then
-                    <code>buildah run --tty</code> to drop you into the built container.</li>
-                <li>Buildah's network (registry pulls, RUN-step <code>apk/apt</code>) flows through this repo's
-                    gVisor netstack proxy, over <code>@webvpn</code>, out to the real internet. No CORS, real DNS, real TCP/UDP.</li>
+        <section class="workbench" aria-label="Dockerfile workbench">
+          <div id="drop-zone" class="editor-pane">
+            <div class="pane-bar">
+              <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+              <span class="file-name">Dockerfile</span>
+              <span class="language-badge">docker</span>
+            </div>
+            <div class="editor-body">
+              <div class="line-numbers" aria-hidden="true">01<br>02<br>03<br>04<br>05</div>
+              <textarea id="paste-box" aria-label="Dockerfile contents" spellcheck="false">FROM alpine:3.19
+
+RUN apk add --no-cache curl
+
+CMD ["/bin/sh"]</textarea>
+              <div class="drop-message" aria-hidden="true">
+                <strong>Drop Dockerfile</strong>
+                <span>Release to load</span>
+              </div>
+            </div>
+            <div class="editor-footer">
+              <span id="editor-meta">5 lines / 1 base image</span>
+              <div class="file-actions">
+                <span id="status" class="status" aria-live="polite">Ready</span>
+                <label class="file-trigger" for="file-input">Load file</label>
+                <input id="file-input" type="file" accept="Dockerfile,.dockerfile,text/plain">
+              </div>
+            </div>
+          </div>
+
+          <aside class="launch-pane">
+            <div>
+              <p class="step-label">Flight plan / 04 stages</p>
+              <h2>From source to shell.</h2>
+            </div>
+            <ol class="flight-plan">
+              <li><span>01</span><div><strong>Boot</strong><small>Linux x86 guest in WASM</small></div></li>
+              <li><span>02</span><div><strong>Pull</strong><small>OCI layers through FKN</small></div></li>
+              <li><span>03</span><div><strong>Build</strong><small>Buildah with live networking</small></div></li>
+              <li><span>04</span><div><strong>Open</strong><small>Your container shell</small></div></li>
             </ol>
-            <p>First Bochs boot takes a few minutes (full x86 emulation). Subsequent builds inside the same tab are fast.</p>
-        </details>
-    </main>
+            <button id="run-btn" type="button">
+              <span>Boot this Dockerfile</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+            </button>
+            <p class="launch-note">The first run downloads a 158 MB guest and can take a few minutes. Keep this tab open.</p>
+          </aside>
+        </section>
+
+        <section class="underlay" aria-labelledby="underlay-title">
+          <div class="underlay-copy">
+            <p class="eyebrow eyebrow-light">What is under the terminal</p>
+            <h2 id="underlay-title">A complete network path, not a fetch shim.</h2>
+            <p>The guest emits Ethernet frames into an in-browser gVisor stack. FKN carries each TCP and UDP flow, while the Dockerfile stays in the URL fragment.</p>
+          </div>
+          <div class="signal-chain" aria-label="Runtime architecture">
+            <div><span>01</span><strong>Linux</strong><small>Bochs x86</small></div>
+            <b aria-hidden="true">+</b>
+            <div><span>02</span><strong>gVisor</strong><small>WASM netstack</small></div>
+            <b aria-hidden="true">+</b>
+            <div><span>03</span><strong>FKN</strong><small>TCP and UDP</small></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <span>Container Lab is a focused FKN capability demo.</span>
+        <a href="https://github.com/Banou26/docker-wasm">Source</a>
+      </footer>
+    </div>
 
     <script type="module" src="/src/playground.ts"></script>
-</body>
+  </body>
 </html>

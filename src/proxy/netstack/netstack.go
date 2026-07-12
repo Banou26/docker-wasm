@@ -154,7 +154,7 @@ func New(cfg Config) (*Network, error) {
 
 	if cfg.UpstreamDNS != "" || cfg.ResolveDNS != nil {
 		if err := n.serveDNS(cfg.Dial, cfg.UpstreamDNS, cfg.ResolveDNS); err != nil {
-			log.Printf("dns forwarder failed to start: %v", err)
+			return nil, fmt.Errorf("start dns forwarder: %w", err)
 		}
 	}
 
@@ -258,8 +258,14 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 				if resolve != nil {
 					resp, err := resolve(query)
 					if err == nil && len(resp) > 0 {
-						_, _ = conn.WriteTo(resp, from)
+						n, writeErr := conn.WriteTo(resp, from)
+						if writeErr != nil || n != len(resp) {
+							log.Printf("dns: write response to %s: wrote %d/%d bytes: %v", from, n, len(resp), writeErr)
+						}
 						return
+					}
+					if err != nil {
+						log.Printf("dns: host resolver failed: %v", err)
 					}
 					// fall through to UDP dial if DoH fails and we have one.
 					if upstream == "" {
@@ -268,19 +274,25 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 				}
 				up, err := dial("udp", upstream)
 				if err != nil {
+					log.Printf("dns: dial %s: %v", upstream, err)
 					return
 				}
 				defer up.Close()
 				if _, err := up.Write(query); err != nil {
+					log.Printf("dns: write query to %s: %v", upstream, err)
 					return
 				}
 				_ = up.SetReadDeadline(time.Now().Add(5 * time.Second))
 				resp := make([]byte, MTU)
 				rn, err := up.Read(resp)
 				if err != nil {
+					log.Printf("dns: read response from %s: %v", upstream, err)
 					return
 				}
-				_, _ = conn.WriteTo(resp[:rn], from)
+				n, writeErr := conn.WriteTo(resp[:rn], from)
+				if writeErr != nil || n != rn {
+					log.Printf("dns: write response to %s: wrote %d/%d bytes: %v", from, n, rn, writeErr)
+				}
 			}(query, from)
 		}
 	}()

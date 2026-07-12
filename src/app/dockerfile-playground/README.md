@@ -46,10 +46,7 @@ pass-through, structurally identical to running fkn/proxy locally).
 ## Build the playground wasm (one-time, ≈ 5 min)
 
 ```sh
-cd src/app/dockerfile-playground
-docker build -t c2w-playground-builder .
-c2w --build-arg VM_MEMORY_SIZE_MB=512 c2w-playground-builder \
-    ../../../public/playground/playground.wasm
+./scripts/build-playground.sh
 
 # Re-stage into the served build/ (Vite copies public/ -> build/ on build):
 ( cd ../../.. && npm run build )
@@ -69,7 +66,7 @@ once; their Dockerfiles cost zero on the build side.
 CERT_HASH=$(curl -s http://localhost:4434/cert-hash)
 cd ~/dev/fkn/web && \
     VITE_WEBVPN_ORIGIN="https://localhost:4433" \
-    VITE_WEBVPN_CERT_HASH="$CERT_HASH" \
+    VITE_WEBVPN_CERT_HASH_URL="http://localhost:4434/cert-hash" \
     VITE_PROXY_ORIGIN="http://127.0.0.1:8080/proxy" \
     npx vite --port 1234 --host 127.0.0.1 &
 
