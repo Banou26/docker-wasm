@@ -80,9 +80,28 @@
               <span>Browser request</span>
               <output id="service-result">Waiting for the image build</output>
             </div>
-            <button id="service-probe" type="button" disabled>GET / through FKN</button>
+            <button id="service-probe" type="button" disabled>Run fetch again</button>
           </section>
-          <div id="terminal"></div>
+          <div class="runtime-workspace">
+            <section class="runtime-terminal-pane" aria-label="Docker guest logs">
+              <div class="runtime-pane-toolbar">
+                <div><span>Docker</span><strong>Guest logs</strong></div>
+                <small>Linux / tty0</small>
+              </div>
+              <div id="terminal"></div>
+            </section>
+            <section id="browser-console" class="browser-console" aria-label="Browser JavaScript console" hidden>
+              <div class="browser-console-toolbar">
+                <div><span>JS</span><strong>Browser console</strong></div>
+                <small id="browser-console-state" data-tone="waiting">Waiting</small>
+              </div>
+              <div id="browser-console-output" class="browser-console-output" role="log" aria-live="polite">
+                <div class="browser-console-line is-comment">
+                  <span>//</span><code>Waiting for the Docker HTTP service.</code>
+                </div>
+              </div>
+            </section>
+          </div>
         </section>
       </main>
     </div>

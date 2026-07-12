@@ -89,7 +89,7 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
   final container prompt accepts input.
 * ✅ **Virtual HTTP service**: `publish=tcp:8080` opens an FKN loopback listener,
   `@fkn/lib/http` connects through the in-process data plane, gVisor dials the
-  guest DHCP lease, and the browser receives the image's HTML response.
+  guest DHCP lease, and the browser receives the image's JSON response.
 * ✅ **Responsive UI**: the workbench and runtime are validated at desktop and
   mobile widths.
 

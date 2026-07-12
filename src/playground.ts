@@ -21,8 +21,13 @@ RUN apk add --no-cache curl
 
 CMD ["/bin/sh"]`
 
-const HTTP_BODY = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Inside the container</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#11120f;color:#f3f0e8;font:18px system-ui}main{max-width:38rem;padding:3rem;border:1px solid #bdff38}b{color:#bdff38;font:700 12px monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:clamp(2.5rem,8vw,5rem);line-height:.9;letter-spacing:-.06em}p{line-height:1.6}</style><main><b>FKN Container Lab</b><h1>Hello from inside the image.</h1><p>This HTTP response crossed an FKN TCP route into a Linux guest running in this browser tab.</p></main></html>'
-const HTTP_RESPONSE_COMMAND = `printf 'HTTP/1.0 200 OK\\r\\nContent-Type: text/html; charset=utf-8\\r\\nContent-Length: ${new TextEncoder().encode(HTTP_BODY).byteLength}\\r\\nConnection: close\\r\\n\\r\\n${HTTP_BODY}'`
+const HTTP_BODY = JSON.stringify({
+  ok: true,
+  message: 'Hello from inside the Docker image.',
+  service: 'guest:8080',
+  transport: 'FKN virtual TCP',
+})
+const HTTP_RESPONSE_COMMAND = `printf 'HTTP/1.0 200 OK\\r\\nContent-Type: application/json; charset=utf-8\\r\\nContent-Length: ${new TextEncoder().encode(HTTP_BODY).byteLength}\\r\\nConnection: close\\r\\n\\r\\n${HTTP_BODY}'`
   .replace(/[\\"$`]/g, '\\$&')
 
 const HTTP_DOCKERFILE = `FROM alpine:3.19

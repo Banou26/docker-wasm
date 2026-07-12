@@ -106,6 +106,11 @@ combines the image entrypoint and command instead of replacing them with
 `/bin/sh`. The runtime waits for a guest-local HTTP response before starting an
 `@fkn/lib/http` request to the returned virtual port.
 
+HTTP mode places the Docker guest logs beside a live browser JavaScript console.
+The console records the real `fetchContainer(url)` call, virtual route, response
+time, HTTP status, headers, and returned body. The request button runs the same
+path again so repeated responses remain visible.
+
 The launcher streams its generated build script into the guest PTY in 512-byte
 chunks; one large terminal paste can truncate a long Dockerfile payload. The
 dependency-free HTTP preset uses BusyBox `nc -lk` and emits each complete framed

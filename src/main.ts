@@ -37,6 +37,17 @@ let closeRuntimeResources: (() => void) | null = null
 
 type PublishSpec = { guestPort: number }
 
+type VirtualHTTPResponse = {
+  status: number
+  statusText: string
+  httpVersion: string
+  headers: Array<[string, string]>
+  body: string
+  elapsedMs: number
+}
+
+type BrowserConsoleTone = 'command' | 'comment' | 'route' | 'header' | 'success' | 'body' | 'error'
+
 const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
   const value = query.get(QUERY_PARAMS.publish)
   if (value === null) return null
@@ -48,11 +59,9 @@ const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
   return { guestPort }
 }
 
-const requestVirtualHTTP = async (
-  virtualHost: string,
-  virtualPort: number,
-): Promise<{ status: number; body: string }> => {
+const fetchContainer = async (url: URL): Promise<VirtualHTTPResponse> => {
   const { request } = await import('@fkn/lib/http')
+  const startedAt = performance.now()
   return new Promise((resolve, reject) => {
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -63,10 +72,10 @@ const requestVirtualHTTP = async (
       callback()
     }
     const req = request({
-      protocol: 'http:',
-      hostname: virtualHost,
-      port: virtualPort,
-      path: '/',
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: Number(url.port || 80),
+      path: url.pathname + url.search,
       method: 'GET',
       headers: { Connection: 'close' },
     }, (response) => {
@@ -76,10 +85,20 @@ const requestVirtualHTTP = async (
         if (body.length >= 2_000) return
         body += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })
       })
-      response.on('end', () => finish(() => resolve({
-        status: response.statusCode || 0,
-        body: (body + decoder.decode()).slice(0, 2_000),
-      })))
+      response.on('end', () => finish(() => {
+        const headers: Array<[string, string]> = []
+        for (let index = 0; index < response.rawHeaders.length; index += 2) {
+          headers.push([response.rawHeaders[index] || '', response.rawHeaders[index + 1] || ''])
+        }
+        resolve({
+          status: response.statusCode || 0,
+          statusText: response.statusMessage || '',
+          httpVersion: response.httpVersion,
+          headers,
+          body: (body + decoder.decode()).slice(0, 2_000),
+          elapsedMs: Math.round(performance.now() - startedAt),
+        })
+      }))
       response.on('error', (error) => finish(() => reject(error)))
     })
     req.on('error', (error) => finish(() => reject(error)))
@@ -165,6 +184,25 @@ const main = async () => {
     throw new Error('virtual service mode requires a Dockerfile')
   }
 
+  const servicePanel = document.getElementById('service-panel')
+  const serviceEndpoint = document.getElementById('service-endpoint')
+  const serviceResult = document.getElementById('service-result') as HTMLOutputElement | null
+  const serviceProbe = document.getElementById('service-probe') as HTMLButtonElement | null
+  const browserConsole = document.getElementById('browser-console')
+  const browserConsoleState = document.getElementById('browser-console-state')
+  const browserConsoleOutput = document.getElementById('browser-console-output')
+
+  if (serviceMode) {
+    document.getElementById('runtime-trace-target')!.textContent = 'to service'
+    document.getElementById('runtime-final-title')!.textContent = 'Run service'
+    document.getElementById('runtime-final-copy')!.textContent = 'HTTP through virtual TCP'
+    if (servicePanel) {
+      servicePanel.hidden = false
+      servicePanel.closest('.terminal-frame')?.classList.add('has-service')
+    }
+    if (browserConsole) browserConsole.hidden = false
+  }
+
   setRuntimeStage(0, 'Loading terminal runtime')
   await init()
 
@@ -198,6 +236,9 @@ const main = async () => {
   xterm.loadAddon(fitAddon)
   fitAddon.fit()
   fitAddon.observeResize()
+  // FitAddon drops observer events during its short resize lock. Refit once
+  // after the final service layout has settled so no canvas rows are clipped.
+  setTimeout(() => fitAddon.fit(), 75)
 
   const { master, slave } = openpty()
   const runtimeMarkers = {
@@ -230,14 +271,6 @@ const main = async () => {
     ? new URL(wasmUrl, location.href).toString()
     : location.origin + (wasmId ? '/wasm/' + wasmId + '/out.wasm' : '/out.wasm')
 
-  if (serviceMode) {
-    document.getElementById('runtime-trace-target')!.textContent = 'to service'
-    document.getElementById('runtime-final-title')!.textContent = 'Run service'
-    document.getElementById('runtime-final-copy')!.textContent = 'HTTP through virtual TCP'
-    const servicePanel = document.getElementById('service-panel')!
-    servicePanel.hidden = false
-    servicePanel.closest('.terminal-frame')?.classList.add('has-service')
-  }
   const stackImage = netParam?.mode === 'browser'
     ? location.origin + '/c2w-net-proxy.wasm'
     : netParam?.mode === 'webvpn'
@@ -270,9 +303,41 @@ const main = async () => {
 
   let virtualPortPromise: Promise<VirtualTCPPort> | null = null
   let probeInFlight = false
-  const serviceEndpoint = document.getElementById('service-endpoint')
-  const serviceResult = document.getElementById('service-result') as HTMLOutputElement | null
-  const serviceProbe = document.getElementById('service-probe') as HTMLButtonElement | null
+  let browserRequestCount = 0
+  const setBrowserConsoleState = (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error'): void => {
+    if (!browserConsoleState) return
+    browserConsoleState.textContent = label
+    browserConsoleState.dataset.tone = tone
+  }
+  const writeBrowserConsole = (prompt: string, message: string, tone: BrowserConsoleTone): void => {
+    if (!browserConsoleOutput) return
+    const line = document.createElement('div')
+    line.className = 'browser-console-line is-' + tone
+    const marker = document.createElement('span')
+    marker.textContent = prompt
+    const code = document.createElement('code')
+    code.textContent = message
+    line.append(marker, code)
+    browserConsoleOutput.append(line)
+    browserConsoleOutput.scrollTop = browserConsoleOutput.scrollHeight
+  }
+  const getVirtualHTTPURL = (virtualPort: VirtualTCPPort): URL => {
+    const host = virtualPort.virtualHost.includes(':')
+      ? '[' + virtualPort.virtualHost + ']'
+      : virtualPort.virtualHost
+    return new URL('http://' + host + ':' + virtualPort.virtualPort + '/')
+  }
+  const initializeBrowserConsole = (virtualPort: VirtualTCPPort): void => {
+    if (!browserConsoleOutput) return
+    const url = getVirtualHTTPURL(virtualPort)
+    browserConsoleOutput.replaceChildren()
+    writeBrowserConsole('//', 'Live code running in this page\'s browser main thread.', 'comment')
+    writeBrowserConsole('//', 'fetchContainer uses @fkn/lib/http over FKN virtual TCP.', 'comment')
+    writeBrowserConsole('>', 'const url = ' + JSON.stringify(url.href), 'command')
+    writeBrowserConsole('>', 'let response', 'command')
+    writeBrowserConsole('->', 'Docker guest :' + virtualPort.guestPort, 'route')
+    setBrowserConsoleState('Port ready', 'waiting')
+  }
   const closeVirtualPort = (): void => {
     if (virtualPortPromise) void virtualPortPromise.then((virtualPort) => virtualPort.close()).catch(() => {})
   }
@@ -285,9 +350,12 @@ const main = async () => {
         serviceEndpoint.textContent = virtualPort.virtualHost + ':' + virtualPort.virtualPort +
           ' -> guest :' + virtualPort.guestPort
       }
+      initializeBrowserConsole(virtualPort)
       return virtualPort
     }).catch((error) => {
       if (serviceResult) serviceResult.textContent = 'Virtual listener failed: ' + error
+      setBrowserConsoleState('Failed', 'error')
+      writeBrowserConsole('!', 'Virtual listener failed: ' + error, 'error')
       setRuntimeStage(currentRuntimeStage, 'Virtual listener failed', 'error')
       throw error
     })
@@ -303,23 +371,55 @@ const main = async () => {
     let lastError: unknown = new Error('service did not respond')
     try {
       const virtualPort = await virtualPortPromise
+      const url = getVirtualHTTPURL(virtualPort)
       const attempts = retry ? 8 : 1
       for (let attempt = 0; attempt < attempts; attempt++) {
+        browserRequestCount++
+        if (browserRequestCount > 1) {
+          writeBrowserConsole('//', 'Request ' + browserRequestCount, 'comment')
+        }
+        writeBrowserConsole('>', 'response = await fetchContainer(url)', 'command')
+        writeBrowserConsole('->', 'GET ' + url.pathname + ' -> Docker guest :' + virtualPort.guestPort, 'route')
+        setBrowserConsoleState('Fetching', 'fetching')
         try {
           serviceResult.textContent = attempt === 0 ? 'Sending GET /' : 'Waiting for guest service, retry ' + attempt
-          const response = await requestVirtualHTTP(virtualPort.virtualHost, virtualPort.virtualPort)
-          const preview = response.body.replace(/\s+/g, ' ').trim().slice(0, 120)
-          serviceResult.textContent = response.status + ' / ' + (preview || 'empty response body')
+          const response = await fetchContainer(url)
+          serviceResult.textContent = response.status + (response.statusText ? ' ' + response.statusText : '') +
+            ' / ' + response.elapsedMs + ' ms'
+          const statusLine = 'HTTP/' + response.httpVersion + ' ' + response.status +
+            (response.statusText ? ' ' + response.statusText : '') + ' (' + response.elapsedMs + ' ms)'
+          writeBrowserConsole('<', statusLine, 'success')
+          for (const [name, value] of response.headers) {
+            writeBrowserConsole('', name.toLowerCase() + ': ' + value, 'header')
+          }
+          const contentType = response.headers
+            .find(([name]) => name.toLowerCase() === 'content-type')?.[1].toLowerCase() || ''
+          let bodyExpression = 'response.body'
+          let bodyOutput = JSON.stringify(response.body)
+          if (contentType.includes('application/json')) {
+            try {
+              bodyExpression = 'JSON.parse(response.body)'
+              bodyOutput = JSON.stringify(JSON.parse(response.body), null, 2)
+            } catch {}
+          }
+          writeBrowserConsole('>', bodyExpression, 'command')
+          writeBrowserConsole('<', bodyOutput, 'body')
+          setBrowserConsoleState(response.status + (response.statusText ? ' ' + response.statusText : ''), 'success')
           setRuntimeStage(3, 'HTTP service reachable through FKN in-process')
           return
         } catch (error) {
           lastError = error
-          if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 2_000))
+          writeBrowserConsole('!', String(error), 'error')
+          if (attempt + 1 < attempts) {
+            setBrowserConsoleState('Retrying', 'waiting')
+            await new Promise((resolve) => setTimeout(resolve, 2_000))
+          }
         }
       }
       throw lastError
     } catch (error) {
       serviceResult.textContent = 'Request failed: ' + error
+      setBrowserConsoleState('Fetch failed', 'error')
       if (retry) setRuntimeStage(3, 'HTTP request did not complete')
     } finally {
       probeInFlight = false
@@ -505,10 +605,20 @@ const main = async () => {
     if (runtimeMarkers.buildFailed || runtimeMarkers.serviceFailed) {
       clearInterval(buildTimer)
       closeVirtualPort()
+      if (serviceProbe) serviceProbe.disabled = true
       if (runtimeMarkers.serviceFailed && serviceResult) {
         serviceResult.textContent = serviceProbeStarted
           ? 'The image service exited'
           : 'The image command did not open guest port ' + publishSpec?.guestPort
+      }
+      if (serviceMode) {
+        const message = runtimeMarkers.buildFailed
+          ? 'Dockerfile build failed before the HTTP request.'
+          : serviceProbeStarted
+            ? 'The Docker HTTP service stopped and its virtual route closed.'
+            : 'The Docker HTTP service did not open guest port ' + publishSpec?.guestPort + '.'
+        setBrowserConsoleState(runtimeMarkers.buildFailed ? 'Build failed' : 'Service stopped', 'error')
+        writeBrowserConsole('!', message, 'error')
       }
       setRuntimeStage(runtimeMarkers.buildFailed ? 2 : 3,
         runtimeMarkers.buildFailed
