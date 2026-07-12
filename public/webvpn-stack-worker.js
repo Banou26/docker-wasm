@@ -86,6 +86,7 @@ onmessage = (msg) => {
     var fds = [undefined, undefined, undefined, undefined, undefined, undefined];
     var listenfd = 4;
     var args = ['arg0', '--net-listenfd=' + listenfd];
+    if (new URLSearchParams(location.search).has('publish')) args.push('--ingress');
     var env = [];
     var wasi = new WASI(args, env, fds);
     wasiHack(wasi, 5);

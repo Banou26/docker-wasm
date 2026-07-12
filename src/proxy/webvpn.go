@@ -32,6 +32,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"c2w-webvpn-proxy/netstack"
 )
 
 // ---- wasmimport ABI ------------------------------------------------------
@@ -51,8 +53,14 @@ func webvpn_send(id uint32, bufP uint32, bufLen uint32, nwrittenP uint32) uint32
 //go:wasmimport env webvpn_recv
 func webvpn_recv(id uint32, bufP uint32, bufLen uint32, nreadP uint32, flagsP uint32) uint32
 
+//go:wasmimport env webvpn_end
+func webvpn_end(id uint32) uint32
+
 //go:wasmimport env webvpn_close
 func webvpn_close(id uint32) uint32
+
+//go:wasmimport env webvpn_ingress_poll
+func webvpn_ingress_poll(networkP uint32, idP uint32, guestPortP uint32) uint32
 
 // webvpn_dns_query pipes raw DNS wire-format bytes through DoH on the host side
 // (via @fkn/lib's serverProxyFetch). Returns 0 on success and writes the
@@ -212,6 +220,26 @@ func dialWebvpn(network, address string) (net.Conn, error) {
 	return &webvpnConn{id: id, network: network, remote: webvpnAddr{network, address}}, nil
 }
 
+func pollWebvpnIngress() (netstack.IngressConn, bool, error) {
+	var network, id, guestPort uint32
+	rc := webvpn_ingress_poll(u32Ptr(&network), u32Ptr(&id), u32Ptr(&guestPort))
+	if rc != 0 {
+		return netstack.IngressConn{}, false, errConnIO
+	}
+	if id == 0 {
+		return netstack.IngressConn{}, false, nil
+	}
+	if network != netTCP || guestPort == 0 || guestPort > 65535 {
+		webvpn_close(id)
+		return netstack.IngressConn{}, false, errConnIO
+	}
+	return netstack.IngressConn{
+		Network:   "tcp",
+		Conn:      &webvpnConn{id: id, network: "tcp", remote: webvpnAddr{"tcp", "fkn-peer"}},
+		GuestPort: uint16(guestPort),
+	}, true, nil
+}
+
 func (c *webvpnConn) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -278,6 +306,16 @@ func (c *webvpnConn) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 	webvpn_close(c.id)
+	return nil
+}
+
+func (c *webvpnConn) CloseWrite() error {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || webvpn_end(c.id) != 0 {
+		return errConnIO
+	}
 	return nil
 }
 

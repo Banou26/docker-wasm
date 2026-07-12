@@ -11,7 +11,7 @@
 // reusing @webvpn's backing buffers across reads caused silent corruption.
 
 import * as webvpnDgram from '@fkn/lib/dgram'
-import { connect as webvpnConnect } from '@fkn/lib/net'
+import { connect as webvpnConnect, createServer as webvpnCreateServer } from '@fkn/lib/net'
 
 type AnyTcpSocket = ReturnType<typeof webvpnConnect>
 type AnyUdpSocket = ReturnType<typeof webvpnDgram.createSocket>
@@ -22,6 +22,8 @@ type TcpState = {
   chunks: Uint8Array[]
   total: number
   paused: boolean
+  highWater: number
+  ingress: boolean
   writeBlocked: boolean
   fin: boolean
   error: number
@@ -48,10 +50,12 @@ type NetstackRequest =
   | { type: 'webvpn_connect'; host: Uint8Array; port: number; network: number }
   | { type: 'webvpn_send'; id: number; buf: Uint8Array }
   | { type: 'webvpn_recv'; id: number; len: number }
+  | { type: 'webvpn_end'; id: number }
   | { type: 'webvpn_close'; id: number }
   | { type: 'webvpn_image_size'; ref: Uint8Array }
   | { type: 'webvpn_image_chunk'; ref: Uint8Array; offset: number; len: number }
   | { type: 'webvpn_dns_query'; query: Uint8Array }
+  | { type: 'webvpn_ingress_poll' }
 
 export type ImageCacheEntry = {
   promise: Promise<Uint8Array> | null
@@ -63,6 +67,14 @@ export type Netstack = {
   // async handlers, or `false` to delegate. Caller is responsible for the
   // Atomics notify after the (possibly-async) write completes.
   handle: (req: NetstackRequest, sab: SAB) => boolean | Promise<void>
+  publishTCP: (guestPort: number) => Promise<PublishedTCPPort>
+  close: () => Promise<void>
+}
+
+export type PublishedTCPPort = {
+  guestPort: number
+  relayPort: number
+  close: () => Promise<void>
 }
 
 // Image cache - populated by main.ts when a Dockerfile hash is present in the URL.
@@ -70,55 +82,84 @@ export type Netstack = {
 export type ImageCache = Map<string, ImageCacheEntry>
 
 const TCP_BUFFER_HIGH_WATER = 4 * 1_024 * 1_024
-const TCP_BUFFER_LOW_WATER = TCP_BUFFER_HIGH_WATER / 2
+const TCP_INGRESS_HIGH_WATER = 256 * 1_024
+const MAX_INGRESS_CONNECTIONS = 32
+
+type TCPPublication = { close: () => Promise<void> }
 
 export const createWebvpnNetstack = (host: {
   imageCache: ImageCache
 }): Netstack => {
   const sockets = new Map<number, SocketState>()
+  const ingress: Array<{ id: number; guestPort: number }> = []
+  const ingressSocketIds = new Set<number>()
+  const publications = new Set<TCPPublication>()
+  let closed = false
+  let closePromise: Promise<void> | null = null
   let nextId = 1
 
-  const openTCP = (hostname: string, port: number): number => {
-    const id = nextId++
-    const sock = webvpnConnect({ host: hostname, port })
+  const nextSocketId = (): number => {
+    const start = nextId
+    do {
+      const id = nextId
+      nextId = nextId >= 0x7FFFFFFF ? 1 : nextId + 1
+      if (!sockets.has(id)) return id
+    } while (nextId !== start)
+    throw new Error('webvpn socket id space exhausted')
+  }
+
+  const registerTCP = (
+    sock: AnyTcpSocket,
+    label: string,
+    options: { ingress?: boolean; startPaused?: boolean } = {},
+  ): number => {
+    const id = nextSocketId()
+    const isIngress = options.ingress === true
     const st: TcpState = {
       kind: 'tcp',
       sock,
       chunks: [],
       total: 0,
-      paused: false,
+      paused: options.startPaused === true,
+      highWater: isIngress ? TCP_INGRESS_HIGH_WATER : TCP_BUFFER_HIGH_WATER,
+      ingress: isIngress,
       writeBlocked: false,
       fin: false,
       error: 0,
     }
     sockets.set(id, st)
+    if (isIngress) ingressSocketIds.add(id)
+    if (st.paused) sock.pause()
     sock.on('data', (chunk: Uint8Array | ArrayBuffer) => {
       const src = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
       const copy = new Uint8Array(src.length)
       copy.set(src)
       st.chunks.push(copy)
       st.total += copy.length
-      if (!st.paused && st.total >= TCP_BUFFER_HIGH_WATER) {
+      if (!st.paused && st.total >= st.highWater) {
         st.paused = true
         sock.pause()
       }
     })
     sock.on('connect', () => {
-      console.log('[webvpn] connected tcp ' + hostname + ':' + port + ' id=' + id)
+      console.log('[webvpn] connected tcp ' + label + ' id=' + id)
     })
     sock.on('drain', () => { st.writeBlocked = false })
     sock.on('end', () => { st.fin = true })
     sock.on('close', () => { st.fin = true })
     sock.on('error', (error) => {
-      console.log('[webvpn] tcp ' + hostname + ':' + port + ' id=' + id + ' failed: ' + error)
+      console.log('[webvpn] tcp ' + label + ' id=' + id + ' failed: ' + error)
       st.error = 1
       st.fin = true
     })
     return id
   }
 
+  const openTCP = (hostname: string, port: number): number =>
+    registerTCP(webvpnConnect({ host: hostname, port }), hostname + ':' + port)
+
   const openUDP = (hostname: string, port: number): number => {
-    const id = nextId++
+    const id = nextSocketId()
     const sock = webvpnDgram.createSocket({ type: 'udp4' })
     const st: UdpState = { kind: 'udp', sock, host: hostname, port, datagrams: [], error: 0 }
     sock.on('message', (data: Uint8Array | ArrayBuffer | { buffer: ArrayBuffer }) => {
@@ -148,7 +189,7 @@ export const createWebvpnNetstack = (host: {
       st.total -= take
       off += take
     }
-    if (st.paused && st.total <= TCP_BUFFER_LOW_WATER) {
+    if (st.paused && st.total <= st.highWater / 2) {
       st.paused = false
       st.sock.resume()
     }
@@ -169,6 +210,116 @@ export const createWebvpnNetstack = (host: {
       else (st.sock as { close: () => void }).close()
     } catch (_e) { /* already gone */ }
     sockets.delete(id)
+    ingressSocketIds.delete(id)
+  }
+
+  const publishTCP = (guestPort: number): Promise<PublishedTCPPort> => {
+    if (closed) return Promise.reject(new Error('webvpn netstack is closed'))
+    if (!Number.isInteger(guestPort) || guestPort < 1 || guestPort > 65535) {
+      return Promise.reject(new Error('guest TCP port must be between 1 and 65535'))
+    }
+
+    return new Promise((resolve, reject) => {
+      let bindState: 'pending' | 'bound' | 'failed' = 'pending'
+      let publishSettled = false
+      let closing = false
+      let closePromise: Promise<void> | null = null
+      let resolveBound!: () => void
+      let rejectBound!: (error: unknown) => void
+      const bound = new Promise<void>((resolveBind, rejectBind) => {
+        resolveBound = resolveBind
+        rejectBound = rejectBind
+      })
+      void bound.catch(() => {})
+      const server = webvpnCreateServer((sock) => {
+        if (closed || closing || ingressSocketIds.size >= MAX_INGRESS_CONNECTIONS) {
+          sock.destroy()
+          return
+        }
+        try {
+          const id = registerTCP(sock, 'ingress for guest :' + guestPort, {
+            ingress: true,
+            startPaused: true,
+          })
+          ingress.push({ id, guestPort })
+        } catch (_error) {
+          sock.destroy()
+        }
+      })
+      const publication: TCPPublication = {
+        close: () => {
+          if (closePromise) return closePromise
+          closing = true
+          closePromise = bound
+            .then(() => new Promise<void>((resolveClose, rejectClose) => {
+              server.close((error) => {
+                if (error) rejectClose(error)
+                else resolveClose()
+              })
+            }))
+            .catch((error) => {
+              if (bindState !== 'failed') throw error
+            })
+            .finally(() => publications.delete(publication))
+          return closePromise
+        },
+      }
+      publications.add(publication)
+      server.on('error', (error) => {
+        if (bindState === 'pending') {
+          bindState = 'failed'
+          rejectBound(error)
+          publications.delete(publication)
+          if (!publishSettled) {
+            publishSettled = true
+            reject(error)
+          }
+          return
+        }
+        console.log('[webvpn] tcp publication failed: ' + error)
+      })
+      server.listen(0, () => {
+        if (bindState !== 'pending') return
+        const address = server.address()
+        if (!address || typeof address === 'string' || !address.port) {
+          const error = new Error('FKN did not return a TCP relay port')
+          bindState = 'failed'
+          rejectBound(error)
+          publications.delete(publication)
+          server.close()
+          if (!publishSettled) {
+            publishSettled = true
+            reject(error)
+          }
+          return
+        }
+        bindState = 'bound'
+        resolveBound()
+        if (closing) {
+          if (!publishSettled) {
+            publishSettled = true
+            reject(new Error('TCP publication closed before it became ready'))
+          }
+          return
+        }
+        publishSettled = true
+        resolve({ guestPort, relayPort: address.port, close: publication.close })
+      })
+    })
+  }
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise
+    closed = true
+    closePromise = (async () => {
+      const results = await Promise.allSettled(
+        Array.from(publications, (publication) => publication.close()),
+      )
+      for (const id of sockets.keys()) closeSocket(id)
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') throw failure.reason
+    })()
+    return closePromise
   }
 
   return {
@@ -176,6 +327,7 @@ export const createWebvpnNetstack = (host: {
       const { streamStatus, streamLen, streamData } = sab
       switch (req.type) {
         case 'webvpn_connect': {
+          if (closed) { streamStatus[0] = -1; return true }
           const hostname = new TextDecoder().decode(req.host)
           const proto = req.network === 1 ? 'udp' : 'tcp'
           try {
@@ -232,9 +384,46 @@ export const createWebvpnNetstack = (host: {
           streamStatus[0] = out.eof ? 1 : 0
           return true
         }
+        case 'webvpn_end': {
+          const st = sockets.get(req.id)
+          if (!st || st.kind !== 'tcp') { streamStatus[0] = -1; return true }
+          const connection = st.sock._webVPNTcpSocketPromise
+          if (!connection) { streamStatus[0] = -1; return true }
+          return new Promise<void>((resolveEnd) => {
+            try {
+              st.sock.end(() => {
+                connection.then(async (socket) => {
+                  if (!socket) throw new Error('TCP socket is unavailable')
+                  await socket.end()
+                  streamStatus[0] = 0
+                }).catch(() => {
+                  streamStatus[0] = -1
+                }).finally(resolveEnd)
+              })
+            } catch (_error) {
+              streamStatus[0] = -1
+              resolveEnd()
+            }
+          })
+        }
         case 'webvpn_close': {
           closeSocket(req.id)
           streamStatus[0] = 0
+          return true
+        }
+        case 'webvpn_ingress_poll': {
+          let event = ingress.shift()
+          while (event && !sockets.has(event.id)) event = ingress.shift()
+          if (event) {
+            const st = sockets.get(event.id)
+            if (st?.kind === 'tcp' && st.ingress && st.paused) {
+              st.paused = false
+              st.sock.resume()
+            }
+          }
+          streamStatus[0] = event?.id || 0
+          streamLen[0] = event?.guestPort || 0
+          streamData[0] = 0
           return true
         }
         case 'webvpn_image_size': {
@@ -296,5 +485,7 @@ export const createWebvpnNetstack = (host: {
           return false
       }
     },
+    publishTCP,
+    close,
   }
 }

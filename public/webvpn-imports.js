@@ -1,7 +1,7 @@
 // webvpn-imports.js - WORKER side (runs in stack-worker.js).
 //
-// Defines the four `env` wasmimports that c2w-webvpn-proxy.wasm calls for
-// egress. Each one is a synchronous, blocking round-trip to the main thread
+// Defines the `env` wasmimports that c2w-webvpn-proxy.wasm calls for network
+// I/O. Each one is a synchronous, blocking round-trip to the main thread
 // over the existing SharedArrayBuffer stream protocol (streamCtrl/streamStatus/
 // streamLen/streamData, set up by worker-util.js's registerSocketBuffer):
 //
@@ -30,6 +30,20 @@ function webvpnEnvImports(wasi) {
     }
 
     return {
+        // webvpn_ingress_poll(networkP, idP, guestPortP) -> errno
+        // Returns id=0 when no FKN TCP connection is waiting for the guest.
+        webvpn_ingress_poll: function (networkP, idP, guestPortP) {
+            streamCtrl[0] = 0;
+            postMessage({ type: "webvpn_ingress_poll" });
+            Atomics.wait(streamCtrl, 0, 0);
+            if (streamStatus[0] < 0) return WEBVPN_ERRNO_INVAL;
+            const view = new DataView(mem());
+            view.setUint32(networkP, streamData[0], true);
+            view.setUint32(idP, streamStatus[0], true);
+            view.setUint32(guestPortP, streamLen[0], true);
+            return 0;
+        },
+
         // webvpn_connect(network, hostP, hostLen, port, idP) -> errno
         // network: 0 = TCP, 1 = UDP. Writes the new socket id to *idP.
         webvpn_connect: function (network, hostP, hostLen, port, idP) {
@@ -81,6 +95,15 @@ function webvpnEnvImports(wasi) {
             view.setUint32(nreadP, n, true);
             view.setUint32(flagsP, streamStatus[0] === 1 ? 1 : 0, true);
             return 0;
+        },
+
+        // webvpn_end(id) -> errno
+        // Sends TCP FIN while leaving the receive direction open.
+        webvpn_end: function (id) {
+            streamCtrl[0] = 0;
+            postMessage({ type: "webvpn_end", id: id });
+            Atomics.wait(streamCtrl, 0, 0);
+            return streamStatus[0] < 0 ? WEBVPN_ERRNO_INVAL : 0;
         },
 
         // webvpn_close(id) -> errno

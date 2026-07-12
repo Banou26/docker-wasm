@@ -102,6 +102,81 @@ func TestTCPForwardThroughProxy(t *testing.T) {
 	t.Logf("TCP round-trip OK: guest -> proxy forwarder (dst=%s) -> dial -> echo -> back (%d bytes)", gotAddr, len(got))
 }
 
+func TestTCPIngressToGuest(t *testing.T) {
+	events := make(chan IngressConn, 1)
+	poll := func() (IngressConn, bool, error) {
+		select {
+		case incoming := <-events:
+			return incoming, true, nil
+		default:
+			return IngressConn{}, false, nil
+		}
+	}
+	guest := setupWithConfig(t, Config{
+		Dial: func(_, _ string) (net.Conn, error) {
+			return nil, errors.New("unexpected outbound dial")
+		},
+		GuestIP:     guestIP,
+		PollIngress: poll,
+	})
+
+	const guestPort = 8080
+	listener, err := gonet.ListenTCP(guest, tcpip.FullAddress{
+		NIC:  1,
+		Addr: tcpip.AddrFrom4Slice(net.ParseIP(guestIP).To4()),
+		Port: guestPort,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("guest listen: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn)
+	}()
+
+	peerListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("peer listen: %v", err)
+	}
+	defer peerListener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := peerListener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	externalConn, err := net.Dial("tcp", peerListener.Addr().String())
+	if err != nil {
+		t.Fatalf("peer dial: %v", err)
+	}
+	external := externalConn.(*net.TCPConn)
+	defer external.Close()
+	proxy := <-accepted
+	events <- IngressConn{Network: "tcp", Conn: proxy, GuestPort: guestPort}
+
+	want := []byte("hello from an FKN ingress peer")
+	_ = external.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := external.Write(want); err != nil {
+		t.Fatalf("external write: %v", err)
+	}
+	if err := external.CloseWrite(); err != nil {
+		t.Fatalf("external close write: %v", err)
+	}
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(external, got); err != nil {
+		t.Fatalf("external read: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ingress echo mismatch: got %q want %q", got, want)
+	}
+}
+
 func TestUDPForwardThroughProxy(t *testing.T) {
 	// local UDP echo server.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")

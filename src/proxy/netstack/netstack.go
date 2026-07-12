@@ -77,13 +77,17 @@ type Config struct {
 	UpstreamDNS string   // e.g. "1.1.1.1:53"; if empty DNS forwarding is disabled
 	ResolveDNS  ResolveDNSFunc
 	ImagePuller ImagePuller
+	GuestIP     string
+	PollIngress PollIngressFunc
 }
 
 // Network is an assembled stack ready to serve a guest connection.
 type Network struct {
-	stack *stack.Stack
-	sw    *gvntap.Switch
-	pool  *gvntap.IPPool
+	stack       *stack.Stack
+	sw          *gvntap.Switch
+	pool        *gvntap.IPPool
+	pollIngress PollIngressFunc
+	guestIP     string
 }
 
 // New assembles the gVisor stack + tap switch from gvisor-tap-vsock's exported
@@ -142,7 +146,13 @@ func New(cfg Config) (*Network, error) {
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder(s, cfg.Dial).HandlePacket)
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder(s, cfg.Dial).HandlePacket)
 
-	n := &Network{stack: s, sw: sw, pool: pool}
+	n := &Network{
+		stack:       s,
+		sw:          sw,
+		pool:        pool,
+		pollIngress: cfg.PollIngress,
+		guestIP:     cfg.GuestIP,
+	}
 
 	// DHCP hands the guest its address + points its resolver at the gateway.
 	// The gvisor-tap-vsock dhcp service only compiles for wasip1 (its dhcp
@@ -172,7 +182,12 @@ func (n *Network) Stack() *stack.Stack { return n.stack }
 
 // Serve reads QEMU-protocol ethernet frames from conn until it closes.
 func (n *Network) Serve(ctx context.Context, conn net.Conn) error {
-	return n.sw.Accept(ctx, conn, gvntypes.QemuProtocol)
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if n.pollIngress != nil {
+		go n.serveIngress(serveCtx, n.pollIngress, n.guestIP)
+	}
+	return n.sw.Accept(serveCtx, conn, gvntypes.QemuProtocol)
 }
 
 func tcpForwarder(s *stack.Stack, dial DialFunc) *tcp.Forwarder {

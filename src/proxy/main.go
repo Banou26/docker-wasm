@@ -32,6 +32,8 @@ func main() {
 	flag.IntVar(&listenFd, "net-listenfd", 0, "fd to listen for the connection from the emulator")
 	var debug bool
 	flag.BoolVar(&debug, "debug", false, "debug log")
+	var ingress bool
+	flag.BoolVar(&ingress, "ingress", false, "forward published FKN TCP ports to the guest")
 	flag.Parse()
 
 	// Always send our own log.Println output to stderr so we can see startup,
@@ -43,13 +45,17 @@ func main() {
 		logrus.SetLevel(logrus.FatalLevel)
 	}
 
-	nw, err := netstack.New(netstack.Config{
+	cfg := netstack.Config{
 		Debug:       debug,
 		Dial:        dialWebvpn,
 		UpstreamDNS: upstreamDNS,
 		ResolveDNS:  resolveDNS,
 		ImagePuller: wasmImagePuller{},
-	})
+	}
+	if ingress {
+		cfg.PollIngress = pollWebvpnIngress
+	}
+	nw, err := netstack.New(cfg)
 	if err != nil {
 		panic(err)
 	}
