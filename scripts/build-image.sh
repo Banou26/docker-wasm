@@ -22,7 +22,6 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
 imagedir="$repo/src/app/alpine-curl"
 public="$repo/public"
-out="$repo/build"
 mkdir -p "$public"
 
 echo "==> 1/6  build the container image (alpine + curl + bind-tools)"
@@ -58,19 +57,6 @@ rm -rf "$src"
 echo "==> 5/6  vite build"
 ( cd "$repo" && npm install --no-audit --no-fund --silent )
 ( cd "$repo" && npm run build )
-
-if [ -n "${FKN_API:-}" ]; then
-    echo "==> 5b   rewrite the @fkn/lib origin to: $FKN_API"
-    origin="${FKN_API%/*}"        # strip trailing /api.html or /api
-    path="/${FKN_API##*/}"
-    # Vite emits hashed assets - rewrite every .js under build/assets/. The bundled
-    # iframe URL is a template literal `${<minified>}/api` where the minified
-    # variable name is whatever Rollup chose this build (`_4` in esbuild, `JC`
-    # or similar in Rollup). Match any identifier.
-    for js in "$out"/assets/*.js; do
-        [ -f "$js" ] && sed -i -E "s|https://fkn.app|$origin|g; s|(\\\$\{[A-Za-z_\\\$0-9]+\})/api(\`|\")|\\1${path}\\2|g" "$js"
-    done
-fi
 
 echo "==> 6/6  done."
 echo

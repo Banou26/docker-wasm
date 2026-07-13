@@ -7,6 +7,7 @@ importScripts(location.origin + "/browser_wasi_shim/wasi_defs.js");
 importScripts(location.origin + "/worker-util.js");
 importScripts(location.origin + "/wasi-util.js");
 importScripts(location.origin + "/webvpn-imports.js");
+importScripts(location.origin + "/wasm-loader.js");
 
 // from wasi-libc
 const ERRNO_INVAL = 28;
@@ -91,14 +92,13 @@ onmessage = (msg) => {
     var wasi = new WASI(args, env, fds);
     wasiHack(wasi, 5);
     wasiHackSocket(wasi, listenfd, 5);
-    fetch(getImagename(), { credentials: 'same-origin' }).then((resp) => {
-        resp['arrayBuffer']().then((wasm) => {
-            WebAssembly.instantiate(wasm, {
-                "wasi_snapshot_preview1": wasi.wasiImport,
-                "env": webvpnEnvImports(wasi),
-            }).then((inst) => {
-                wasi.start(inst.instance);
-            });
-        })
+    instantiateWasm(fetchWasm(getImagename()), {
+        "wasi_snapshot_preview1": wasi.wasiImport,
+        "env": webvpnEnvImports(wasi),
+    }).then((inst) => {
+        wasi.start(inst.instance);
+    }).catch((error) => {
+        console.error('network stack WASM failed: ' + error);
+        throw error;
     });
 };

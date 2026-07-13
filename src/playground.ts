@@ -1,4 +1,4 @@
-import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from './shared'
+import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
 
 const dropZone = document.getElementById('drop-zone')!
 const pasteBox = document.getElementById('paste-box') as HTMLTextAreaElement
@@ -28,14 +28,16 @@ const HTTP_BODY = JSON.stringify({
   transport: 'FKN virtual TCP',
 })
 const HTTP_RESPONSE_COMMAND = `printf 'HTTP/1.0 200 OK\\r\\nContent-Type: application/json; charset=utf-8\\r\\nContent-Length: ${new TextEncoder().encode(HTTP_BODY).byteLength}\\r\\nConnection: close\\r\\n\\r\\n${HTTP_BODY}'`
-  .replace(/[\\"$`]/g, '\\$&')
+const shellQuote = (value: string): string => "'" + value.replace(/'/g, "'\"'\"'") + "'"
+const HTTP_SERVICE_COMMAND =
+  "printf '%s\\n' '#!/bin/sh' " + shellQuote(HTTP_RESPONSE_COMMAND) + ' > /tmp/fkn-http-serve && ' +
+  'chmod +x /tmp/fkn-http-serve && ' +
+  'while true; do /bin/busybox nc -l -p 8080 -e /tmp/fkn-http-serve; done'
 
 const HTTP_DOCKERFILE = `FROM alpine:3.19
 
-RUN mkdir -p /www && printf '%s\\n' '#!/bin/sh' "${HTTP_RESPONSE_COMMAND}" > /www/serve && chmod +x /www/serve
-
 EXPOSE 8080
-CMD ["/bin/busybox", "nc", "-lk", "-p", "8080", "-e", "/www/serve"]`
+CMD ${JSON.stringify(['/bin/sh', '-c', HTTP_SERVICE_COMMAND])}`
 
 let demoMode: DemoMode = 'shell'
 
@@ -136,7 +138,7 @@ const run = (): void => {
   status.className = 'status ok'
   const params = new URLSearchParams({
     [QUERY_PARAMS.net]: 'webvpn',
-    [QUERY_PARAMS.wasmUrl]: '/playground/playground.wasm',
+    [QUERY_PARAMS.wasmUrl]: withWasmAssetVersion('/playground/playground.wasm'),
   })
   if (demoMode === 'http') {
     params.set(QUERY_PARAMS.publish, 'tcp:8080')

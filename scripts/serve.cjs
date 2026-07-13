@@ -18,6 +18,10 @@ const path = require('path')
 const port = parseInt(process.env.PORT || '8080', 10)
 const here = __dirname
 const root = path.join(here, '..', 'build')
+let wasmVersions = {}
+try {
+    wasmVersions = JSON.parse(fs.readFileSync(path.join(root, 'wasm-versions.json'), 'utf8'))
+} catch (_) {}
 
 const types = {
     '.html': 'text/html; charset=utf-8',
@@ -36,19 +40,65 @@ const coiHeaders = {
     // https://fkn.app/api bridge) while still giving SharedArrayBuffer.
     'Cross-Origin-Embedder-Policy': 'credentialless',
     'Cross-Origin-Resource-Policy': 'cross-origin',
+}
+const dynamicHeaders = {
+    ...coiHeaders,
     'Cache-Control': 'no-store',
 }
 
-function serveFile(res, full) {
+function serveFile(req, res, full, immutable) {
     fs.stat(full, (err, st) => {
         if (err || !st.isFile()) { res.writeHead(404); return res.end('not found') }
-        res.writeHead(200, {
-            'Content-Type': types[path.extname(full)] || 'application/octet-stream',
-            'Content-Length': st.size,
-            ...coiHeaders,
-        })
-        fs.createReadStream(full).pipe(res)
+
+        const finish = (servedFile, servedStat, encoding) => {
+            const etag = '"' + servedStat.size.toString(16) + '-' + Math.floor(servedStat.mtimeMs).toString(16) + '"'
+            const headers = {
+                'Content-Type': types[path.extname(full)] || 'application/octet-stream',
+                'Content-Length': servedStat.size,
+                'Cache-Control': immutable
+                    ? 'public, max-age=31536000, immutable'
+                    : 'public, max-age=0, must-revalidate',
+                'ETag': etag,
+                ...coiHeaders,
+            }
+            if (path.extname(full) === '.wasm') headers.Vary = 'Accept-Encoding'
+            if (encoding) headers['Content-Encoding'] = encoding
+            const matches = (req.headers['if-none-match'] || '').split(',').map((value) => value.trim())
+            if (matches.includes(etag)) {
+                delete headers['Content-Length']
+                res.writeHead(304, headers)
+                return res.end()
+            }
+            res.writeHead(200, headers)
+            if (req.method === 'HEAD') return res.end()
+            fs.createReadStream(servedFile).pipe(res)
+        }
+
+        const acceptsGzip = acceptsEncoding(req.headers['accept-encoding'], 'gzip')
+        if (path.extname(full) === '.wasm' && acceptsGzip) {
+            const compressed = full + '.gz'
+            fs.stat(compressed, (gzipErr, gzipStat) => {
+                if (!gzipErr && gzipStat.isFile()) return finish(compressed, gzipStat, 'gzip')
+                finish(full, st)
+            })
+            return
+        }
+        finish(full, st)
     })
+}
+
+function acceptsEncoding(header, wanted) {
+    let wildcard = false
+    for (const item of String(header || '').split(',')) {
+        const [rawName, ...params] = item.split(';')
+        const name = rawName.trim().toLowerCase()
+        const qParam = params.map((part) => part.trim()).find((part) => /^q\s*=/i.test(part))
+        const quality = qParam ? Number(qParam.slice(qParam.indexOf('=') + 1).trim()) : 1
+        const accepted = Number.isFinite(quality) && quality > 0
+        if (name === wanted) return accepted
+        if (name === '*') wildcard = accepted
+    }
+    return wildcard
 }
 
 // fkn-proxy-compatible shim. @fkn/lib's serverProxyFetch (in fkn/web) sends
@@ -100,7 +150,7 @@ async function handleProxy(req, res) {
         respHeadersObj['x-upstream-status'] = String(up.status)
         const buf = Buffer.from(await up.arrayBuffer())
         res.writeHead(up.status, {
-            ...coiHeaders,
+            ...dynamicHeaders,
             'Access-Control-Allow-Origin': req.headers.origin || '*',
             'Access-Control-Allow-Credentials': 'true',
             'Access-Control-Expose-Headers': 'fkn-proxy-headers, Content-Length, Content-Type',
@@ -120,7 +170,7 @@ http.createServer((req, res) => {
 
     if (req.method === 'OPTIONS' && p === '/proxy') {
         res.writeHead(204, {
-            ...coiHeaders,
+            ...dynamicHeaders,
             'Access-Control-Allow-Origin': req.headers.origin || '*',
             'Access-Control-Allow-Methods': 'GET, POST, PUT, HEAD, OPTIONS',
             'Access-Control-Allow-Headers': 'fkn-proxy-protocol, fkn-proxy-hostname, fkn-proxy-pathname, fkn-proxy-search, fkn-proxy-headers, fkn-proxy-render, content-type',
@@ -144,7 +194,11 @@ http.createServer((req, res) => {
     if (rel.endsWith('/')) rel += 'index.html'
     const full = path.normalize(path.join(root, rel))
     if (!full.startsWith(root)) { res.writeHead(403); return res.end() }
-    return serveFile(res, full)
+    const wasmUrl = '/' + rel
+    const immutable = (path.extname(full) === '.wasm' &&
+        wasmVersions[wasmUrl] === u.searchParams.get('v')) ||
+        /^assets\/.+-[A-Za-z0-9_-]{8,}\.[^/]+$/.test(rel)
+    return serveFile(req, res, full, immutable)
 }).listen(port, '127.0.0.1', () => {
     console.log('docker-wasm (static + /proxy shim):')
     console.log('  runtime : http://127.0.0.1:' + port + '/?net=webvpn')

@@ -9,11 +9,12 @@
     "dev-wasm": "concurrently \"nodemon -e go --watch src/proxy --exec \\\"npm run make-docker\\\"\"",
     "make-docker": "docker compose run --rm docker-wasm make",
     "dev-web": "vite --port 1234",
-    "vite-build": "vite build",
+    "vite-build": "vite build && npm run compress-wasm",
     "vite-build-dev": "vite build --watch",
-    "build": "npm run make-docker && vite build && npm run copy-wasm",
+    "build": "npm run make-docker && vite build && npm run copy-wasm && npm run compress-wasm",
     "typecheck": "tsc --noEmit",
     "copy-wasm": "copyfiles -u 1 dist/*.wasm public/ && copyfiles -u 1 dist/*.wasm build/",
+    "compress-wasm": "node scripts/compress-wasm.cjs",
     "preview": "vite preview"
   },
   "devDependencies": {

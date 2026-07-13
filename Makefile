@@ -10,13 +10,15 @@ GOARCH := wasm
 GOTAGS := osusergo
 
 WASM := c2w-webvpn-proxy.wasm
+GO_SOURCES := $(wildcard src/proxy/*.go src/proxy/netstack/*.go) src/proxy/go.mod src/proxy/go.sum
+GO_SOURCE_DIRS := src/proxy src/proxy/netstack
 
 # dist/ is the canonical build output (mirrors libav-wasm). public/ holds a
 # copy so vite-dev serves the wasm at /c2w-webvpn-proxy.wasm without needing
 # the dist-middleware fallthrough - matches the URLs the runtime hardcodes.
 all: public/$(WASM)
 
-dist/$(WASM):
+dist/$(WASM): Makefile $(GO_SOURCE_DIRS) $(GO_SOURCES)
 	mkdir -p dist && \
 	cd src/proxy && GOOS=$(GOOS) GOARCH=$(GOARCH) go build -tags $(GOTAGS) -o ../../dist/$(WASM) .
 

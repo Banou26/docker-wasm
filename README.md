@@ -111,11 +111,17 @@ The console records the real `fetchContainer(url)` call, virtual route, response
 time, HTTP status, headers, and returned body. The request button runs the same
 path again so repeated responses remain visible.
 
-The launcher streams its generated build script into the guest PTY in 512-byte
-chunks; one large terminal paste can truncate a long Dockerfile payload. The
-dependency-free HTTP preset uses BusyBox `nc -lk` and emits each complete framed
-response from one shell-builtin `printf`, which keeps repeated requests stable
-inside the nested runtime.
+The launcher streams its generated build script into the guest PTY in 256-byte
+chunks at a bounded rate; a large or fast terminal paste can truncate a long
+Dockerfile payload. The dependency-free HTTP preset has no `RUN` layer. Its
+default command creates a small response helper at startup and uses a BusyBox
+`nc` accept loop, keeping repeated requests stable inside the nested runtime.
+
+Production builds precompress the guest and proxy WASM with gzip. Each WASM URL
+has its own content digest, so `scripts/serve.cjs` can cache it as
+immutable without a proxy-only rebuild invalidating the much larger guest. The
+workers compile directly from the response stream. Stable asset URLs revalidate
+with ETags, while Vite's hashed assets are immutable.
 
 ```sh
 npm install

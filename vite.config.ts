@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { defineConfig } from 'vite'
 import { createReadStream, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { extname, join } from 'node:path'
 
 // COOP/COEP for SharedArrayBuffer + cross-origin iframe (the @fkn/lib RPC iframe
@@ -9,13 +10,37 @@ const coiHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'credentialless',
   'Cross-Origin-Resource-Policy': 'cross-origin',
-  'Cache-Control': 'no-store',
 }
 
-// Used at runtime to override the @fkn/lib iframe origin baked into the bundle.
+const devHeaders = {
+  ...coiHeaders,
+  'Cache-Control': 'no-cache',
+}
+
+const wasmAssetFiles = [
+  ['/playground/playground.wasm', 'public/playground/playground.wasm'],
+  ['/c2w-webvpn-proxy.wasm', 'public/c2w-webvpn-proxy.wasm'],
+  ['/c2w-net-proxy.wasm', 'public/c2w-net-proxy.wasm'],
+  ['/out.wasm', 'public/out.wasm'],
+] as const
+
+const hashAsset = (file: string): Promise<string> => new Promise((resolve) => {
+  const hash = createHash('sha256')
+  const stream = createReadStream(join(process.cwd(), file))
+  stream.on('data', (chunk) => hash.update(chunk))
+  stream.on('end', () => resolve(hash.digest('hex')))
+  stream.on('error', () => resolve('missing'))
+})
+
+const wasmAssetVersions = Object.fromEntries(await Promise.all(
+  wasmAssetFiles.map(async ([url, file]) => [url, await hashAsset(file)] as const),
+))
+
+// Override the @fkn/lib iframe URL before Rollup calculates content hashes.
 // Set FKN_API=http://127.0.0.1:1234/api.html for a fully-local fkn/web dev
 // server; defaults to the prod URL otherwise.
-const fknApi = process.env.FKN_API || 'https://fkn.app/api'
+const fknApi = new URL(process.env.FKN_API || 'https://fkn.app/api')
+const fknApiPath = fknApi.pathname + fknApi.search + fknApi.hash
 
 export default defineConfig({
   root: '.',
@@ -54,15 +79,38 @@ export default defineConfig({
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
     global: 'globalThis',
-    __FKN_API__: JSON.stringify(fknApi),
+    __WASM_ASSET_VERSIONS__: JSON.stringify(wasmAssetVersions),
   },
   server: {
-    headers: coiHeaders,
+    headers: devHeaders,
   },
   preview: {
-    headers: coiHeaders,
+    headers: devHeaders,
   },
   plugins: [
+    {
+      name: 'fkn-api-url',
+      enforce: 'pre',
+      transform: (code, id) => {
+        const normalizedId = id.replaceAll('\\', '/')
+        if (!normalizedId.includes('/node_modules/@fkn/lib/')) return null
+        let rewritten = code.replaceAll('https://fkn.app', fknApi.origin)
+        if (/\/api-[^/]+\.js$/.test(normalizedId)) {
+          rewritten = rewritten.replace(/(\$\{[A-Za-z_$][\w$]*\})\/api(?=[`"])/g, '$1' + fknApiPath)
+        }
+        return rewritten === code ? null : { code: rewritten, map: null }
+      },
+    },
+    {
+      name: 'emit-wasm-versions',
+      generateBundle: function () {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'wasm-versions.json',
+          source: JSON.stringify(wasmAssetVersions),
+        })
+      },
+    },
     {
       // Serve dist/* raw during dev (the Go-wasm artifact lands there before
       // make's copy step propagates it into public/). Mirrors libav-wasm.

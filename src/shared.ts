@@ -2,6 +2,15 @@
 // alpine-curl c2w runtime. Both Vite entries import these constants from
 // ./shared so the playground and runtime stay in lockstep.
 
+declare const __WASM_ASSET_VERSIONS__: Record<string, string>
+
+export const withWasmAssetVersion = (url: string): string => {
+  const path = url.split('?', 1)[0]!
+  const version = __WASM_ASSET_VERSIONS__[path] || 'dev'
+  const separator = url.includes('?') ? '&' : '?'
+  return url + separator + 'v=' + encodeURIComponent(version)
+}
+
 // URL hash payload the playground produces and the runtime consumes.
 // The runtime page resolves `#dockerfile=<base64-utf8>` and pulls each FROM
 // reference at boot before auto-pasting a build script into the shell.

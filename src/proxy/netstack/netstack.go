@@ -68,7 +68,10 @@ type ImagePuller interface {
 }
 
 // ImageHTTPPort is the gateway port the image-streaming server listens on.
-const ImageHTTPPort = 9090
+const (
+	ImageHTTPPort  = 9090
+	imageChunkSize = 64 * 1024
+)
 
 // Config configures the network stack.
 type Config struct {
@@ -344,8 +347,8 @@ func (n *Network) serveImageHTTP(puller ImagePuller) error {
 		w.Header().Set("Content-Type", "application/x-tar")
 		w.Header().Set("Content-Length", strconv.Itoa(size))
 		w.WriteHeader(http.StatusOK)
-		// Stream in 4 KiB chunks (matches the SAB data window on the JS bridge).
-		buf := make([]byte, 4096)
+		// Fill the complete SharedArrayBuffer data window on each JS bridge call.
+		buf := make([]byte, imageChunkSize)
 		offset := 0
 		for offset < size {
 			want := size - offset

@@ -23,8 +23,9 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │         │   wget http://192.168.127.1:9090/img/<ref> -O /tmp/<ref>.tar       │
 │         │   buildah pull docker-archive:/tmp/<ref>.tar                        │
 │         │   buildah bud --pull=never -t userimg .                             │
-│         │   shell: buildah run --tty "$ctr" /bin/sh                          │
-│         │   service: run image command + map FKN virtual TCP into guest       │
+│         │   FROM/EXPOSE/CMD: reuse Buildah's final build container             │
+│         │   otherwise: create a container from userimg                         │
+│         │   run shell or image command + map virtual TCP when requested        │
 │         ▼                                                                     │
 │  netstack proxy serves the pulled tar bytes at gateway:9090 via two          │
 │  wasmimports (webvpn_image_size + webvpn_image_chunk) into a JS-side cache.  │
@@ -54,9 +55,10 @@ npm run build
 `VM_MEMORY_SIZE_MB=512` is required: buildah's chroot-isolation RUN spawns a
 subprocess that OOMs at the default 128 MB.
 
-`playground.wasm` is the only thing that ships per-deployment (≈ 160 MB:
-alpine + buildah + cdrkit + Bochs + a Linux kernel). The user downloads it
-once; their Dockerfiles cost zero on the build side.
+`playground.wasm` is the only large guest artifact that ships per deployment
+(about 158 MiB raw or 57 MiB gzip: alpine + buildah + cdrkit + Bochs + a Linux
+kernel). Its versioned URL remains cached until that artifact changes; a proxy
+rebuild does not invalidate it. Dockerfiles cost zero on the build side.
 
 ## Run
 
@@ -95,9 +97,17 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
 
 ## Known sharp edges
 
-* Bochs emulation is slow; the build is on the order of minutes for a simple
-  `FROM alpine; CMD …`. Most of the time is spent copying the layer through
-  vfs storage; future work: a smarter storage driver or larger guest RAM.
+* Bochs emulation is slow. In a warm-cache validation on `banou-pc`, the default
+  metadata-only HTTP image finished building at about 55 seconds and returned
+  its first response at about 79 seconds. A repeated request took 61 ms. This
+  compact `FROM`/`EXPOSE`/`CMD` path retains Buildah's final working container
+  instead of copying the completed image into vfs storage again, then removes
+  stale intermediate containers after launch. Other Dockerfiles keep the normal
+  container creation path.
+* Most build time remains in vfs layer copies. Native overlay cannot use the
+  guest's overlay-backed root, and the guest cannot mount a separate tmpfs
+  backing store. A persistent guest layer cache remains the next storage-level
+  optimization.
 * The generated launch script must stay chunked across PTY writes. A single
   large paste truncates around the terminal input limit before the here-doc
   delimiter arrives.

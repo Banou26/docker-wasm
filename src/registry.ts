@@ -35,6 +35,14 @@ type ProxyFetchInit = {
   body?: BodyInit
 }
 
+type RegistryToken = {
+  value: string
+  expiresAt: number
+}
+
+const registryTokens = new Map<string, RegistryToken>()
+const registryTokenRequests = new Map<string, Promise<RegistryToken | null>>()
+
 const proxyFetch = async (url: string, opts: ProxyFetchInit = {}): Promise<FetchResult> => {
   const r = await cloudFetch(url, {
     method: opts.method || 'GET',
@@ -86,7 +94,10 @@ export const parseRef = (ref: string): Ref => {
   return { registry, repository: path, tag, digest }
 }
 
-const fetchToken = async (www: string, repository: string): Promise<string | null> => {
+const fetchToken = async (www: string, repository: string, cacheKey: string): Promise<string | null> => {
+  const pending = registryTokenRequests.get(cacheKey)
+  if (pending) return (await pending)?.value || null
+
   // www: 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"'
   const m = www.match(/Bearer\s+(.+)/i)
   if (!m) return null
@@ -103,17 +114,44 @@ const fetchToken = async (www: string, repository: string): Promise<string | nul
   if (params.service) url.searchParams.set('service', params.service)
   url.searchParams.set('scope', 'repository:' + repository + ':pull')
   url.searchParams.set('_fkn', crypto.randomUUID())
-  const { status, body } = await proxyFetch(url.toString())
-  if (status !== 200) throw new Error('token endpoint returned ' + status)
-  const j = await body.json()
-  return j.token || j.access_token || null
+  const request = (async (): Promise<RegistryToken | null> => {
+    const { status, body } = await proxyFetch(url.toString())
+    if (status !== 200) throw new Error('token endpoint returned ' + status)
+    const j = await body.json() as { token?: string; access_token?: string; expires_in?: number }
+    const value = j.token || j.access_token
+    if (!value) return null
+    const expiresIn = Number(j.expires_in)
+    const ttlSeconds = Number.isFinite(expiresIn) ? Math.max(1, expiresIn - 30) : 240
+    const token = { value, expiresAt: Date.now() + ttlSeconds * 1000 }
+    registryTokens.set(cacheKey, token)
+    return token
+  })()
+  registryTokenRequests.set(cacheKey, request)
+  try {
+    return (await request)?.value || null
+  } finally {
+    registryTokenRequests.delete(cacheKey)
+  }
 }
 
 const getWithAuth = async (url: string, repository: string, accept?: string): Promise<FetchResult> => {
   const headers: Record<string, string> = accept ? { Accept: accept } : {}
+  const cacheKey = new URL(url).origin + '|' + repository
+  const cachedToken = registryTokens.get(cacheKey)
+  if (cachedToken && cachedToken.expiresAt > Date.now()) {
+    headers.Authorization = 'Bearer ' + cachedToken.value
+  } else if (cachedToken) {
+    registryTokens.delete(cacheKey)
+  }
   let r = await proxyFetch(url, { headers })
   if (r.status === 401) {
-    const token = await fetchToken(r.headers['www-authenticate'] || '', repository)
+    const failedToken = cachedToken?.value
+    const currentToken = registryTokens.get(cacheKey)
+    if (failedToken && currentToken?.value === failedToken) registryTokens.delete(cacheKey)
+    const replacement = registryTokens.get(cacheKey)
+    const token = replacement && replacement.expiresAt > Date.now()
+      ? replacement.value
+      : await fetchToken(r.headers['www-authenticate'] || '', repository, cacheKey)
     if (!token) throw new Error('no bearer auth on ' + url)
     headers.Authorization = 'Bearer ' + token
     r = await proxyFetch(url, { headers })
@@ -170,6 +208,23 @@ const getBlobBytes = async (registry: string, repository: string, digest: string
   if (r.status !== 200) throw new Error('blob ' + digest + ' -> ' + r.status)
   const ab = await r.body.arrayBuffer()
   return new Uint8Array(ab)
+}
+
+const mapConcurrent = async <T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      results[index] = await task(items[index]!, index)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 // ---- USTAR writer: plain files + directory-implied paths only.
@@ -234,23 +289,24 @@ export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Ui
   const mj = JSON.parse(m.body)
   if (!mj.config || !Array.isArray(mj.layers)) throw new Error('unsupported manifest schema')
 
-  // Step 2: config blob.
+  // Step 2: fetch the config and layers concurrently while preserving order.
   onLog('fetch config ' + mj.config.digest)
-  const configBytes = await getBlobBytes(registry, repository, mj.config.digest)
+  const configPromise = getBlobBytes(registry, repository, mj.config.digest)
   const configName = mj.config.digest.replace(/^sha256:/, '') + '.json'
 
-  // Step 3: layer blobs. docker-archive layer dir = layer digest minus "sha256:".
+  // docker-archive layer dir = layer digest minus "sha256:".
   // skopeo (which buildah uses to read docker-archive:) accepts gzipped layers.
+  type BlobDescriptor = { digest: string; size: number }
   type LayerEntry = { dir: string; file: string; bytes: Uint8Array }
-  const layerEntries: LayerEntry[] = []
-  for (let i = 0; i < mj.layers.length; i++) {
-    const l = mj.layers[i]
+  const layers = mj.layers as BlobDescriptor[]
+  const layerEntriesPromise = mapConcurrent(layers, 3, async (l, i): Promise<LayerEntry> => {
     onLog('fetch layer ' + (i + 1) + '/' + mj.layers.length + ' ' + l.digest + ' (' + Math.round(l.size / 1024) + ' KiB)')
     const bytes = await getBlobBytes(registry, repository, l.digest)
-    layerEntries.push({ dir: l.digest.replace(/^sha256:/, ''), file: 'layer.tar', bytes })
-  }
+    return { dir: l.digest.replace(/^sha256:/, ''), file: 'layer.tar', bytes }
+  })
+  const [configBytes, layerEntries] = await Promise.all([configPromise, layerEntriesPromise])
 
-  // Step 4: assemble docker-archive tar.
+  // Step 3: assemble docker-archive tar.
   const parts: Uint8Array[] = []
   parts.push(...tarFile(configName, configBytes))
   for (const e of layerEntries) {

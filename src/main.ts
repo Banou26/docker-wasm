@@ -26,7 +26,7 @@ import type { NetMode } from './shared'
 import { newStack } from './stack'
 import { createWebvpnNetstack } from './webvpn-netstack'
 import { pullImage, dockerfileFromRefs } from './registry'
-import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS } from './shared'
+import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
 
 // Loaded into globals by /ws-delegate.js (kept as a static asset under public/).
 declare const delegate: (worker: Worker, image: string, address: string) => (msg: MessageEvent) => void
@@ -34,6 +34,17 @@ declare const delegate: (worker: Worker, image: string, address: string) => (msg
 let currentRuntimeStage = 0
 let runtimeFailed = false
 let closeRuntimeResources: (() => void) | null = null
+
+const runtimeTimings: Record<string, number> = {}
+;(window as typeof window & { dockerWasmTimings?: Record<string, number> }).dockerWasmTimings = runtimeTimings
+const markRuntimeTiming = (name: string): void => {
+  if (runtimeTimings[name] !== undefined) return
+  const elapsedMs = Math.round(performance.now())
+  runtimeTimings[name] = elapsedMs
+  performance.mark('docker-wasm:' + name)
+  console.info('[timing] ' + name + ': ' + elapsedMs + ' ms from navigation')
+}
+markRuntimeTiming('runtime-script-ready')
 
 type PublishSpec = { guestPort: number }
 
@@ -239,6 +250,7 @@ const main = async () => {
   // FitAddon drops observer events during its short resize lock. Refit once
   // after the final service layout has settled so no canvas rows are clipped.
   setTimeout(() => fitAddon.fit(), 75)
+  markRuntimeTiming('terminal-ready')
 
   const { master, slave } = openpty()
   const runtimeMarkers = {
@@ -269,17 +281,18 @@ const main = async () => {
   const wasmId = queryParams.get(QUERY_PARAMS.wasm)
   const workerImage = wasmUrl
     ? new URL(wasmUrl, location.href).toString()
-    : location.origin + (wasmId ? '/wasm/' + wasmId + '/out.wasm' : '/out.wasm')
+    : location.origin + (wasmId ? '/wasm/' + wasmId + '/out.wasm' : withWasmAssetVersion('/out.wasm'))
 
   const stackImage = netParam?.mode === 'browser'
-    ? location.origin + '/c2w-net-proxy.wasm'
+    ? location.origin + withWasmAssetVersion('/c2w-net-proxy.wasm')
     : netParam?.mode === 'webvpn'
-      ? location.origin + '/c2w-webvpn-proxy.wasm'
+      ? location.origin + withWasmAssetVersion('/c2w-webvpn-proxy.wasm')
       : null
   await Promise.all([
     assertWasmAsset(workerImage, 'Guest image'),
     ...(stackImage ? [assertWasmAsset(stackImage, 'Network stack')] : []),
   ])
+  markRuntimeTiming('wasm-assets-validated')
   setRuntimeStage(0, 'Booting Linux guest')
 
   // Image cache populated below from #dockerfile=<b64> in the URL hash.
@@ -351,6 +364,7 @@ const main = async () => {
           ' -> guest :' + virtualPort.guestPort
       }
       initializeBrowserConsole(virtualPort)
+      markRuntimeTiming('virtual-listener-ready')
       return virtualPort
     }).catch((error) => {
       if (serviceResult) serviceResult.textContent = 'Virtual listener failed: ' + error
@@ -384,6 +398,7 @@ const main = async () => {
         try {
           serviceResult.textContent = attempt === 0 ? 'Sending GET /' : 'Waiting for guest service, retry ' + attempt
           const response = await fetchContainer(url)
+          markRuntimeTiming('first-http-response')
           serviceResult.textContent = response.status + (response.statusText ? ' ' + response.statusText : '') +
             ' / ' + response.elapsedMs + ' ms'
           const statusLine = 'HTTP/' + response.httpVersion + ' ' + response.status +
@@ -438,14 +453,14 @@ const main = async () => {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/stack-worker.js' + location.search),
-        location.origin + '/c2w-net-proxy.wasm',
+        location.origin + withWasmAssetVersion('/c2w-net-proxy.wasm'),
         ensureWebvpn,
       )
     } else if (netParam.mode === 'webvpn') {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/webvpn-stack-worker.js' + location.search),
-        location.origin + '/c2w-webvpn-proxy.wasm',
+        location.origin + withWasmAssetVersion('/c2w-webvpn-proxy.wasm'),
         ensureWebvpn,
       )
     }
@@ -454,6 +469,7 @@ const main = async () => {
     worker.postMessage({ type: 'init', imagename: workerImage })
   }
   new TtyServer(slave).start(worker as unknown as Parameters<TtyServer['start']>[0], nwStack)
+  markRuntimeTiming('workers-started')
 
   const terminalTail = (count: number): string => {
     return [xterm.buffer.normal, xterm.buffer.alternate]
@@ -478,6 +494,7 @@ const main = async () => {
     const promptTimer = setInterval(() => {
       if (!/# *$/.test(terminalTail(2).trimEnd())) return
       clearInterval(promptTimer)
+      markRuntimeTiming('guest-shell-ready')
       setRuntimeStage(3, 'Linux shell ready')
     }, 500)
     return
@@ -488,6 +505,18 @@ const main = async () => {
   while (dockerfileB64Padded.length % 4) dockerfileB64Padded += '='
 
   const refs = dockerfileFromRefs(dockerfileText)
+  // The compact HTTP preset can run Buildah's final working container without
+  // copying the completed image into VFS storage a second time.
+  const instructions: string[] = []
+  const parsedInstructions = dockerfileText.split('\n').every((line) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) return true
+    const instruction = /^([A-Za-z]+)/.exec(trimmed)?.[1]?.toUpperCase()
+    if (instruction) instructions.push(instruction)
+    return instruction !== undefined
+  })
+  const canReuseBuildContainer = parsedInstructions && instructions.join(',') === 'FROM,EXPOSE,CMD'
+  if (refs.length === 0) markRuntimeTiming('base-images-ready')
   setRuntimeStage(1, refs.length === 0
     ? 'No base image pull required'
     : 'Pulling ' + refs.length + ' base image' + (refs.length === 1 ? '' : 's'))
@@ -502,7 +531,10 @@ const main = async () => {
       .then((b) => { entry.bytes = b; return b })
     entry.promise.then(() => {
       readyRefs++
-      if (readyRefs === refs.length) setRuntimeStage(1, 'Base image ready, Linux booting')
+      if (readyRefs === refs.length) {
+        markRuntimeTiming('base-images-ready')
+        setRuntimeStage(1, 'Base image ready, Linux booting')
+      }
     }, (error) => {
       closeVirtualPort()
       setRuntimeStage(1, 'Image pull failed: ' + error, 'error')
@@ -532,7 +564,8 @@ const main = async () => {
     pullBlock +
     "echo '" + dockerfileB64Padded + "' | base64 -d > Dockerfile\n" +
     'echo == buildah build ==\n' +
-    'buildah bud --isolation chroot --network host --pull=never -t userimg .\n' +
+    'buildah bud' + (canReuseBuildContainer ? ' --layers --rm=false' : '') +
+    ' --isolation chroot --network host --pull=never -t userimg .\n' +
     'echo == build complete ==\n'
   const defaultCommandSetup = runImageDefault
     ? 'cmdfile=/tmp/fkn-image-command\n' +
@@ -542,8 +575,15 @@ const main = async () => {
       '[ "$#" -gt 0 ] || { echo "image has no default command" >&2; echo __FKN_SERVICE_"FAILED"__; exit 1; }\n'
     : ''
   const containerCommand = runImageDefault ? ' "$@"' : ' /bin/sh'
+  const createContainer = canReuseBuildContainer
+    ? 'build_containers=$(buildah containers -q); ' +
+      'ctr=$(printf "%s\\n" "$build_containers" | /bin/busybox tail -n 1); ' +
+      '( sleep 30; for candidate in $build_containers; do ' +
+      '[ "$candidate" = "$ctr" ] || buildah rm "$candidate" >/dev/null 2>&1 || true; done ) & ' +
+      '[ -n "$ctr" ] || ctr=$(buildah from userimg)'
+    : 'ctr=$(buildah from userimg)'
   const containerLaunch = serviceMode && publishSpec
-    ? '  ctr=$(buildah from userimg) || { echo __FKN_SERVICE_"FAILED"__; exit 1; }\n' +
+    ? '  ' + createContainer + ' || { echo __FKN_SERVICE_"FAILED"__; exit 1; }\n' +
       '  printf "== image command =="; printf " <%s>" "$@"; printf "\\n"\n' +
       '  (\n' +
       '    attempt=0\n' +
@@ -568,7 +608,7 @@ const main = async () => {
       '  wait "$readiness_pid" 2>/dev/null || true\n' +
       '  echo __FKN_SERVICE_"FAILED"__\n' +
       '  exit "$status"\n'
-    : '  ctr=$(buildah from userimg) && exec buildah run --network host --terminal --env TERM=dumb "$ctr"' + containerCommand + '\n'
+    : '  ' + createContainer + ' && exec buildah run --network host --terminal --env TERM=dumb "$ctr"' + containerCommand + '\n'
   const script =
     "if sh -eu <<'FKN_BUILD'\n" + buildCommands +
     'FKN_BUILD\n' +
@@ -585,16 +625,18 @@ const main = async () => {
   // buffer matches xterm.js's (baseY + cursorY → row index; getLine().translateToString()).
   let sent = false
   const pasteScript = async (): Promise<void> => {
-    for (let offset = 0; offset < script.length; offset += 512) {
-      xterm.paste(script.slice(offset, offset + 512))
-      await new Promise((resolve) => setTimeout(resolve, 10))
+    for (let offset = 0; offset < script.length; offset += 256) {
+      xterm.paste(script.slice(offset, offset + 256))
+      await new Promise((resolve) => setTimeout(resolve, 50))
     }
+    markRuntimeTiming('build-script-sent')
   }
   const tryFeed = () => {
     if (sent) return
     const last = terminalTail(2).trimEnd()
     if (!/# *$/.test(last)) return
     sent = true
+    markRuntimeTiming('guest-shell-ready')
     setRuntimeStage(2, 'Building Dockerfile in Linux')
     void pasteScript()
   }
@@ -628,11 +670,13 @@ const main = async () => {
       return
     }
     if (!runtimeMarkers.buildOk) return
+    markRuntimeTiming('image-built')
     if (serviceMode) {
       if (serviceProbeStarted) return
       setRuntimeStage(3, 'Starting virtual HTTP service')
       if (serviceResult) serviceResult.textContent = 'Waiting for guest service on :' + publishSpec?.guestPort
       if (!runtimeMarkers.serviceReady) return
+      markRuntimeTiming('guest-service-ready')
       if (serviceProbe) serviceProbe.disabled = false
       if (!serviceProbeStarted) {
         serviceProbeStarted = true
