@@ -1,0 +1,24 @@
+diff --git a/cmd/create-spec/main.go b/cmd/create-spec/main.go
+index 834206a..f32b38a 100644
+--- a/cmd/create-spec/main.go
++++ b/cmd/create-spec/main.go
+@@ -377,6 +377,19 @@ func generateSpec(config ocispec.Image, rootfs string) (_ *specs.Spec, err error
+ 	s.Root = &specs.Root{
+ 		Path: runtimeRootfsPath,
+ 	}
++	s.Mounts = append(s.Mounts, specs.Mount{
++		Destination: "/var/lib/containers/storage",
++		Type:        "tmpfs",
++		Source:      "tmpfs",
++		Options:     []string{"rw", "nosuid", "nodev", "mode=0755", "size=256m"},
++	})
++	for _, capabilities := range []*[]string{
++		&s.Process.Capabilities.Bounding,
++		&s.Process.Capabilities.Permitted,
++		&s.Process.Capabilities.Effective,
++	} {
++		*capabilities = append(*capabilities, "CAP_SYS_ADMIN")
++	}
+ 	// TODO: ports
+ 	return s, nil
+ }

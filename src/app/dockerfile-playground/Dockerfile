@@ -9,15 +9,14 @@ FROM alpine:3.19
 
 RUN apk add --no-cache buildah ca-certificates && update-ca-certificates
 
-# vfs = no overlay/loopback/privileged needs.
-# chroot isolation = no nested runc/userns.
-ENV STORAGE_DRIVER=vfs \
+# Use c2w's dedicated tmpfs graphroot for native overlay CoW; chroot avoids a nested OCI runtime.
+ENV STORAGE_DRIVER=overlay \
     BUILDAH_ISOLATION=chroot
 
 # Pre-baked storage config: write the same defaults the auto-paste script writes
 # so buildah works directly on first invocation.
 RUN mkdir -p /etc/containers /var/lib/containers/storage /run/containers/storage && \
-    printf '[storage]\ndriver = "vfs"\ngraphroot = "/var/lib/containers/storage"\nrunroot = "/run/containers/storage"\n[storage.options]\n' > /etc/containers/storage.conf && \
+    printf '[storage]\ndriver = "overlay"\ngraphroot = "/var/lib/containers/storage"\nrunroot = "/run/containers/storage"\n[storage.options.overlay]\nmountopt = "nodev"\n' > /etc/containers/storage.conf && \
     printf 'unqualified-search-registries = ["docker.io"]\n' > /etc/containers/registries.conf
 
 WORKDIR /work

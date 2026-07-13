@@ -295,9 +295,9 @@ const main = async () => {
   markRuntimeTiming('wasm-assets-validated')
   setRuntimeStage(0, 'Booting Linux guest')
 
-  // Image cache populated below from #dockerfile=<b64> in the URL hash.
+  // Artifact cache populated below from #dockerfile=<b64> in the URL hash.
   // createWebvpnNetstack reads from it when the proxy worker requests an
-  // image_size or image_chunk for a FROM ref.
+  // image_size or image_chunk for a FROM ref or generated build script.
   const imageCache: ImageCache = new Map()
 
   // c2w-webvpn lazy init: build the netstack the first time a webvpn_* arrives.
@@ -489,7 +489,7 @@ const main = async () => {
   // In-browser dockerfile playground: if location.hash carries a base64
   // Dockerfile, kick off the FROM-image pulls in JS right now (so the netstack
   // proxy's gateway HTTP server has bytes ready by the time the guest wget's
-  // them), then when the shell prompt appears, type a build script.
+  // them), then run the generated build script when the shell prompt appears.
   if (dockerfileText === null || dockerfileB64 === null) {
     const promptTimer = setInterval(() => {
       if (!/# *$/.test(terminalTail(2).trimEnd())) return
@@ -506,7 +506,7 @@ const main = async () => {
 
   const refs = dockerfileFromRefs(dockerfileText)
   // The compact HTTP preset can run Buildah's final working container without
-  // copying the completed image into VFS storage a second time.
+  // creating another container from the completed image.
   const instructions: string[] = []
   const parsedInstructions = dockerfileText.split('\n').every((line) => {
     const trimmed = line.trim()
@@ -543,10 +543,11 @@ const main = async () => {
 
   const storageConf =
     '[storage]\\n' +
-    'driver = "vfs"\\n' +
+    'driver = "overlay"\\n' +
     'graphroot = "/var/lib/containers/storage"\\n' +
     'runroot = "/run/containers/storage"\\n' +
-    '[storage.options]\\n'
+    '[storage.options.overlay]\\n' +
+    'mountopt = "nodev"\\n'
 
   let pullBlock = ''
   for (const ref of refs) {
@@ -555,7 +556,8 @@ const main = async () => {
     pullBlock +=
       'echo "== pull ' + ref + ' =="\n' +
       "wget -q 'http://192.168.127.1:9090/img/" + enc + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
-      'buildah pull docker-archive:/tmp/' + safe + '.tar\n'
+      'buildah pull docker-archive:/tmp/' + safe + '.tar\n' +
+      'rm -f /tmp/' + safe + '.tar\n'
   }
   const buildCommands =
     'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
@@ -621,14 +623,19 @@ const main = async () => {
     '  echo __FKN_BUILD_"FAILED"__\n' +
     'fi\n'
 
+  // Serve the generated script through the local artifact bridge to avoid PTY input limits.
+  const buildScriptRef = '__fkn_runtime_build_script__'
+  const buildScriptBytes = new TextEncoder().encode(script)
+  imageCache.set(buildScriptRef, { promise: null, bytes: buildScriptBytes })
+  const buildScriptURL = 'http://192.168.127.1:9090/img/' + encodeURIComponent(buildScriptRef)
+  const launcher = "if wget -q '" + buildScriptURL +
+    "' -O /tmp/fkn-build.sh; then sh /tmp/fkn-build.sh; else echo __FKN_BUILD_\"FAILED\"__; fi\n"
+
   // Wait for the shell to print a "# " prompt before pasting; ghostty-web's
   // buffer matches xterm.js's (baseY + cursorY → row index; getLine().translateToString()).
   let sent = false
-  const pasteScript = async (): Promise<void> => {
-    for (let offset = 0; offset < script.length; offset += 256) {
-      xterm.paste(script.slice(offset, offset + 256))
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
+  const pasteScript = (): void => {
+    xterm.paste(launcher)
     markRuntimeTiming('build-script-sent')
   }
   const tryFeed = () => {
@@ -638,7 +645,7 @@ const main = async () => {
     sent = true
     markRuntimeTiming('guest-shell-ready')
     setRuntimeStage(2, 'Building Dockerfile in Linux')
-    void pasteScript()
+    pasteScript()
   }
   const iv = setInterval(() => { tryFeed(); if (sent) clearInterval(iv) }, 1000)
   let serviceProbeStarted = false

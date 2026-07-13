@@ -19,15 +19,14 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │         │                                                                     │
 │         ▼                                                                     │
 │  c2w runtime → boots playground.wasm (alpine + buildah inside Bochs)         │
-│         │ at shell prompt, auto-types:                                        │
-│         │   wget http://192.168.127.1:9090/img/<ref> -O /tmp/<ref>.tar       │
-│         │   buildah pull docker-archive:/tmp/<ref>.tar                        │
-│         │   buildah bud --pull=never -t userimg .                             │
+│         │ at shell prompt, fetches the generated build script from :9090      │
+│         │   script fetches each /img/<ref> and imports its docker-archive     │
+│         │   buildah bud --isolation chroot --pull=never -t userimg .          │
 │         │   FROM/EXPOSE/CMD: reuse Buildah's final build container             │
 │         │   otherwise: create a container from userimg                         │
 │         │   run shell or image command + map virtual TCP when requested        │
 │         ▼                                                                     │
-│  netstack proxy serves the pulled tar bytes at gateway:9090 via two          │
+│  netstack proxy serves scripts and tar bytes at gateway:9090 via two         │
 │  wasmimports (webvpn_image_size + webvpn_image_chunk) into a JS-side cache.  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -55,6 +54,11 @@ npm run build
 `VM_MEMORY_SIZE_MB=512` is required: buildah's chroot-isolation RUN spawns a
 subprocess that OOMs at the default 128 MB.
 
+The build script patches container2wasm v0.8.4 before conversion. The resulting
+OCI spec grants `CAP_SYS_ADMIN` and mounts a 256 MiB tmpfs at
+`/var/lib/containers/storage`, giving Buildah a native overlay graphroot without
+placing another overlay on the guest's overlay-backed root.
+
 `playground.wasm` is the only large guest artifact that ships per deployment
 (about 158 MiB raw or 57 MiB gzip: alpine + buildah + cdrkit + Bochs + a Linux
 kernel). Its versioned URL remains cached until that artifact changes; a proxy
@@ -69,8 +73,9 @@ npm run dev-web
 Open <http://localhost:1234/playground/>. Drop or paste a Dockerfile, choose a
 launch, and click the launch button. The JS side starts pulling FROM images
 immediately. Once Bochs boots, the auto-paste downloads the bytes from the
-netstack proxy's gateway:9090 HTTP server and imports them with
-`buildah pull docker-archive:`. It then runs the user's Dockerfile. Shell mode
+netstack proxy's gateway:9090 HTTP server and runs the generated build script.
+The script imports image archives with `buildah pull docker-archive:` and removes
+the temporary tar after import. It then runs the user's Dockerfile. Shell mode
 opens `/bin/sh`. HTTP service mode starts the image command, waits for guest port
 8080, and requests the service through an in-process FKN virtual TCP port.
 
@@ -87,6 +92,10 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
   UDP through @webvpn.
 * ✅ **RUN steps with network**: the FKN netstack path serves
   arbitrary TCP/UDP for `RUN apk add …` etc.
+* ✅ **Native overlay layers**: Buildah uses a dedicated tmpfs graphroot with
+  native overlay diff support. A browser validation committed a filesystem
+  mutation from `RUN printf cow-layer > /cow-layer`, started the resulting
+  image, and returned HTTP 200.
 * ✅ **Interactive shell**: both Ghostty terminal buffers are rendered and the
   final container prompt accepts input.
 * ✅ **Virtual HTTP service**: `publish=tcp:8080` opens an FKN loopback listener,
@@ -98,19 +107,21 @@ opens `/bin/sh`. HTTP service mode starts the image command, waits for guest por
 ## Known sharp edges
 
 * Bochs emulation is slow. In a warm-cache validation on `banou-pc`, the default
-  metadata-only HTTP image finished building at about 55 seconds and returned
-  its first response at about 79 seconds. A repeated request took 61 ms. This
+  metadata-only HTTP image finished building at 50.0 seconds, reached service
+  readiness at 70.0 seconds, and returned its first response in 66 ms. The prior
+  VFS checkpoint reached service readiness at 79.2 seconds. This
   compact `FROM`/`EXPOSE`/`CMD` path retains Buildah's final working container
-  instead of copying the completed image into vfs storage again, then removes
+  instead of creating another container from the completed image, then removes
   stale intermediate containers after launch. Other Dockerfiles keep the normal
   container creation path.
-* Most build time remains in vfs layer copies. Native overlay cannot use the
-  guest's overlay-backed root, and the guest cannot mount a separate tmpfs
-  backing store. A persistent guest layer cache remains the next storage-level
-  optimization.
-* The generated launch script must stay chunked across PTY writes. A single
-  large paste truncates around the terminal input limit before the here-doc
-  delimiter arrives.
+* Buildah cannot place native overlay directly on the guest's overlay-backed
+  root. The patched OCI tmpfs is therefore required. A persistent guest layer
+  cache remains the next storage-level optimization.
+* The overlay graphroot is capped at 256 MiB inside the 512 MiB guest. Larger
+  imported images or build layers can exhaust that storage.
+* Generated build scripts are served through the local gateway artifact bridge.
+  Sending the full script through the interactive PTY can stop at its input
+  limit before the final command arrives.
 * The base64 hash payload caps at the URL length the browser allows (a few
   kilobytes in practice). Larger Dockerfiles or contexts would need a
   different transport.
