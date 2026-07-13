@@ -117,11 +117,12 @@ dependency-free HTTP preset has no `RUN` layer. Its default command creates a
 small response helper at startup and uses a BusyBox `nc` accept loop, keeping
 repeated requests stable inside the nested runtime.
 
-Production stores gzip-encoded guest and proxy WASM in R2 at
-`container-assets.fkn.app`. Each URL carries its own content digest, so a
-proxy-only rebuild does not invalidate the much larger guest. Workers compile
-directly from the decoded response stream. R2 retains digest-bearing object
-keys for rollback safety, and Vite's hashed assets are immutable.
+Production stores gzip-encoded guest and proxy WASM in R2. A read-only Pages
+Function serves those objects from `container.fkn.app/wasm-assets/`, so every
+browser request remains same-origin. Each URL carries its own content digest,
+so a proxy-only rebuild does not invalidate the much larger guest. Workers
+compile directly from the decoded response stream. R2 retains digest-bearing
+object keys for rollback safety, and Vite's hashed assets are immutable.
 
 ```sh
 npm ci
@@ -136,8 +137,8 @@ WASM files under `public/` are gitignored and must already be built locally.
 `container.fkn.app` is a Cloudflare Pages project built with
 `npm run build:pages`. Pages serves the application and isolation headers. The
 generated WASM files exceed Pages' per-file limit, so a dedicated
-`fkn-container-assets` R2 bucket serves them through
-`container-assets.fkn.app` with public read CORS.
+`fkn-container-assets` R2 bucket is bound to a read-only Pages Function at
+`/wasm-assets/*`. The bucket has no public hostname or CORS configuration.
 
 After rebuilding an artifact, publish that compressed object and atomically
 refresh `wasm-assets.json` only after the public object passes metadata and

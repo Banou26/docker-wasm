@@ -28,7 +28,7 @@ const committedWasmAssetVersions = JSON.parse(
   readFileSync(join(process.cwd(), 'wasm-assets.json'), 'utf8'),
 ) as Record<string, string>
 const wasmAssetBase = (process.env.WASM_ASSET_BASE ??
-  (process.env.CF_PAGES ? 'https://container-assets.fkn.app' : '')).replace(/\/+$/, '')
+  (process.env.CF_PAGES ? '/wasm-assets' : '')).replace(/\/+$/, '')
 const requiredExternalWasmAssets = [
   '/playground/playground.wasm',
   '/c2w-webvpn-proxy.wasm',

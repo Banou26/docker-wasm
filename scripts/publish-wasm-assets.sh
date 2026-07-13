@@ -4,7 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
 bucket=fkn-container-assets
-asset_origin=https://container-assets.fkn.app
+asset_origin=https://container.fkn.app/wasm-assets
 cache_control='public, max-age=31536000, immutable'
 wrangler="$repo/node_modules/.bin/wrangler"
 
@@ -67,7 +67,6 @@ node "$here/update-wasm-versions.cjs" \
     "${manifest_paths[@]}"
 
 node "$here/compress-wasm.cjs" "$stage"
-"$wrangler" r2 bucket cors set "$bucket" --file "$here/r2-cors.json" --force
 
 for asset in "${assets[@]}"; do
     IFS='|' read -r name manifest_path source object_base <<< "$asset"
@@ -85,13 +84,11 @@ for asset in "${assets[@]}"; do
         --remote
 
     headers="$(curl --fail --silent --show-error --head \
-        -H 'Origin: https://container.fkn.app' \
         -H 'Accept-Encoding: gzip' "$url")"
     headers="${headers//$'\r'/}"
     headers="${headers,,}"
     [[ "$headers" == *$'content-type: application/wasm'* ]] || { echo "$name has the wrong content type" >&2; exit 1; }
     [[ "$headers" == *$'content-encoding: gzip'* ]] || { echo "$name has the wrong content encoding" >&2; exit 1; }
-    [[ "$headers" == *$'access-control-allow-origin: *'* ]] || { echo "$name is missing public read CORS" >&2; exit 1; }
     [[ "$headers" == *$'cache-control: public, max-age=31536000, immutable'* ]] || { echo "$name has the wrong cache policy" >&2; exit 1; }
 
     actual="$(curl --fail --silent --show-error --compressed "$url" | sha256sum)"

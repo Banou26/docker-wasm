@@ -10,6 +10,7 @@ dist/
 .vite/
 .wrangler/
 .wasm-publish.*
+_worker.bundle
 *.tsbuildinfo
 
 # Upstream c2w sources cloned into public/ during build-image.sh.

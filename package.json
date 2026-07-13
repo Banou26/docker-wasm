@@ -10,7 +10,7 @@
     "make-docker": "docker compose run --rm docker-wasm make",
     "dev-web": "vite --port 1234",
     "vite-build": "vite build && npm run compress-wasm",
-    "build:pages": "WASM_ASSET_BASE=https://container-assets.fkn.app vite build && node scripts/prepare-pages-build.cjs",
+    "build:pages": "WASM_ASSET_BASE=/wasm-assets vite build && node scripts/prepare-pages-build.cjs",
     "vite-build-dev": "vite build --watch",
     "build": "npm run make-docker && vite build && npm run copy-wasm && npm run compress-wasm",
     "typecheck": "tsc --noEmit",
