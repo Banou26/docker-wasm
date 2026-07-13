@@ -62,7 +62,7 @@ echo "==> 6/6  done."
 echo
 echo "Serve cross-origin-isolated:"
 echo "    node $here/serve.cjs"
-echo "Then open: http://127.0.0.1:8080/?net=webvpn"
+echo "Then open: http://127.0.0.1:8080/playground/?net=webvpn"
 echo
 echo "Automated headless test (puppeteer + curl through the netstack):"
 echo "    node $here/drive.cjs"

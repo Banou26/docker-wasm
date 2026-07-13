@@ -3,119 +3,111 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="description" content="Build a Dockerfile inside a browser tab with Linux, WebAssembly, Buildah, and FKN networking.">
-    <title>Container Lab by FKN</title>
+    <meta name="description" content="A live Linux container build running inside the browser with FKN networking.">
+    <title>Container Runtime / FKN Lab</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/src/style.css">
+    <link rel="stylesheet" href="/src/runtime.css">
+    <!-- Classic inline script - runs BEFORE the module so the patch is in
+         place when @fkn/lib's RPC iframe (to https://fkn.app/api or local
+         override) is created. COEP=credentialless requires the embedded doc
+         to either CORP-allow or be credentialless; setting el.credentialless
+         + the attribute covers both Chrome / spec accessor paths. -->
+    <script>
+      window.__shimMarker = 'installed-at-parse-time';
+      window.__iframeCreates = [];
+      (function () {
+        var _ce = Document.prototype.createElement;
+        Document.prototype.createElement = function (tag, opts) {
+          var el = _ce.call(this, tag, opts);
+          if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
+            window.__iframeCreates.push({ when: performance.now(), src: el.src });
+            try { el.credentialless = true; } catch (e) {}
+            try { el.setAttribute('credentialless', ''); } catch (e) {}
+          }
+          return el;
+        };
+      })();
+    </script>
   </head>
-  <body>
-    <div class="site-shell">
-      <nav class="topbar" aria-label="Primary navigation">
-        <a class="brand" href="https://fkn.app" aria-label="FKN home">
-          <span class="brand-mark">FKN</span>
-          <span class="brand-product">Container Lab</span>
+  <body class="runtime-page">
+    <div class="runtime-app">
+      <header class="runtime-header">
+        <a class="runtime-brand" href="/" aria-label="Back to Container Lab">
+          <span>FKN</span>
+          <strong>Container Lab</strong>
         </a>
-        <div class="topbar-meta">
-          <span class="pulse" aria-hidden="true"></span>
-          Browser runtime
-          <span class="topbar-index">LAB / 01</span>
+        <div class="session-title">
+          <i aria-hidden="true"></i>
+          <span id="runtime-state" aria-live="polite">Preparing browser runtime</span>
         </div>
-      </nav>
+        <div class="runtime-badges" aria-label="Runtime technologies">
+          <span>Linux x86</span>
+          <span>WASM</span>
+          <span>FKN network</span>
+        </div>
+      </header>
 
-      <main>
-        <section class="hero" aria-labelledby="hero-title">
+      <main class="runtime-grid">
+        <aside class="runtime-rail">
           <div>
-            <p class="eyebrow">Linux, packed into a browser tab</p>
-            <h1 id="hero-title">Build the image.<br><em>Keep the shell.</em></h1>
+            <p class="rail-label">Execution trace</p>
+            <h1>Dockerfile<br><span id="runtime-trace-target">to shell</span></h1>
           </div>
-          <div class="hero-copy">
-            <p>Paste a Dockerfile. The tab boots Linux in WebAssembly, pulls the base image through FKN, builds it with Buildah, and hands you the resulting container.</p>
-            <div class="hero-facts" aria-label="Runtime facts">
-              <span><strong>0</strong> build servers</span>
-              <span><strong>1</strong> browser tab</span>
-              <span><strong>TCP + UDP</strong> via FKN</span>
-            </div>
+          <ol class="runtime-stages">
+            <li class="is-active" data-runtime-stage="0"><span>01</span><div><strong>Boot guest</strong><small>Linux in WebAssembly</small></div></li>
+            <li data-runtime-stage="1"><span>02</span><div><strong>Pull image</strong><small>OCI through FKN</small></div></li>
+            <li data-runtime-stage="2"><span>03</span><div><strong>Build layers</strong><small>Buildah in the guest</small></div></li>
+            <li data-runtime-stage="3"><span>04</span><div><strong id="runtime-final-title">Open shell</strong><small id="runtime-final-copy">Interactive container</small></div></li>
+          </ol>
+          <div class="rail-note">
+            <span>Local workload</span>
+            <p>The guest, build cache, and terminal stay in this tab.</p>
           </div>
-        </section>
+        </aside>
 
-        <section class="workbench" aria-label="Dockerfile workbench">
-          <div id="drop-zone" class="editor-pane">
-            <div class="pane-bar">
-              <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
-              <span class="file-name">Dockerfile</span>
-              <span class="language-badge">docker</span>
+        <section class="terminal-frame" aria-label="Container terminal">
+          <div class="terminal-toolbar">
+            <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span>container-session / tty0</span>
+            <div class="runtime-progress" aria-hidden="true"><i id="runtime-progress"></i></div>
+          </div>
+          <section id="service-panel" class="service-panel" aria-label="FKN virtual HTTP service" hidden>
+            <div class="service-endpoint">
+              <span>FKN virtual TCP</span>
+              <strong id="service-endpoint">Binding in-process port</strong>
             </div>
-            <div class="editor-body">
-              <div class="line-numbers" aria-hidden="true">01<br>02<br>03<br>04<br>05</div>
-              <textarea id="paste-box" aria-label="Dockerfile contents" spellcheck="false">FROM alpine:3.19
-
-RUN apk add --no-cache curl
-
-CMD ["/bin/sh"]</textarea>
-              <div class="drop-message" aria-hidden="true">
-                <strong>Drop Dockerfile</strong>
-                <span>Release to load</span>
+            <div class="service-result">
+              <span>Browser request</span>
+              <output id="service-result">Waiting for the image build</output>
+            </div>
+            <button id="service-probe" type="button" disabled>Run fetch again</button>
+          </section>
+          <div class="runtime-workspace">
+            <section class="runtime-terminal-pane" aria-label="Docker guest logs">
+              <div class="runtime-pane-toolbar">
+                <div><span>Docker</span><strong>Guest logs</strong></div>
+                <small>Linux / tty0</small>
               </div>
-            </div>
-            <div class="editor-footer">
-              <span id="editor-meta">5 lines / 1 base image</span>
-              <div class="file-actions">
-                <span id="status" class="status" aria-live="polite">Ready</span>
-                <label class="file-trigger" for="file-input">Load file</label>
-                <input id="file-input" type="file" accept="Dockerfile,.dockerfile,text/plain">
+              <div id="terminal"></div>
+            </section>
+            <section id="browser-console" class="browser-console" aria-label="Browser JavaScript console" hidden>
+              <div class="browser-console-toolbar">
+                <div><span>JS</span><strong>Browser console</strong></div>
+                <small id="browser-console-state" data-tone="waiting">Waiting</small>
               </div>
-            </div>
-          </div>
-
-          <aside class="launch-pane">
-            <div>
-              <p class="step-label">Flight plan / 04 stages</p>
-              <h2 id="flight-title">From source to shell.</h2>
-            </div>
-            <ol class="flight-plan">
-              <li><span>01</span><div><strong>Boot</strong><small>Linux x86 guest in WASM</small></div></li>
-              <li><span>02</span><div><strong>Pull</strong><small>OCI layers through FKN</small></div></li>
-              <li><span>03</span><div><strong>Build</strong><small>Buildah with live networking</small></div></li>
-              <li><span>04</span><div><strong id="final-stage-title">Open</strong><small id="final-stage-copy">Your container shell</small></div></li>
-            </ol>
-            <div class="mode-picker">
-              <span>Choose a launch</span>
-              <div role="group" aria-label="Container Lab example">
-                <button class="is-active" type="button" data-demo-mode="shell" aria-pressed="true">Shell</button>
-                <button type="button" data-demo-mode="http" aria-pressed="false">HTTP service</button>
+              <div id="browser-console-output" class="browser-console-output" role="log" aria-live="polite">
+                <div class="browser-console-line is-comment">
+                  <span>//</span><code>Waiting for the Docker HTTP service.</code>
+                </div>
               </div>
-              <small id="mode-copy">Build the image, then work inside its shell.</small>
-            </div>
-            <button id="run-btn" type="button">
-              <span id="run-label">Boot this Dockerfile</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
-            </button>
-            <p class="launch-note">The first run downloads a 158 MB guest and can take a few minutes. Keep this tab open.</p>
-          </aside>
-        </section>
-
-        <section class="underlay" aria-labelledby="underlay-title">
-          <div class="underlay-copy">
-            <p class="eyebrow eyebrow-light">What is under the terminal</p>
-            <h2 id="underlay-title">A complete network path, not a fetch shim.</h2>
-            <p>The guest emits Ethernet frames into an in-browser gVisor stack. FKN carries each TCP and UDP flow, while the Dockerfile stays in the URL fragment.</p>
-          </div>
-          <div class="signal-chain" aria-label="Runtime architecture">
-            <div><span>01</span><strong>Linux</strong><small>Bochs x86</small></div>
-            <b aria-hidden="true">+</b>
-            <div><span>02</span><strong>gVisor</strong><small>WASM netstack</small></div>
-            <b aria-hidden="true">+</b>
-            <div><span>03</span><strong>FKN</strong><small>TCP and UDP</small></div>
+            </section>
           </div>
         </section>
       </main>
-
-      <footer>
-        <span>Container Lab is a focused FKN capability demo.</span>
-        <a href="https://github.com/Banou26/docker-wasm">Source</a>
-      </footer>
     </div>
-
-    <script type="module" src="/src/playground.ts"></script>
+    <!-- ws-delegate.js (upstream c2w) is a classic script that defines
+         globalThis.delegate for ?net=delegate mode. Load before the module. -->
+    <script src="/ws-delegate.js"></script>
+    <script type="module" src="/src/bootstrap.ts"></script>
   </body>
 </html>

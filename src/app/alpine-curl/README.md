@@ -66,7 +66,7 @@ FKN_API="http://127.0.0.1:1234/api.html" ./scripts/build-image.sh
 This produces (in `build/`):
 - `out.wasm`: the alpine container (≈120 MB)
 - `c2w-webvpn-proxy.wasm`: the netstack proxy
-- `assets/index.js`: the Vite-bundled main thread (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
+- the hashed Vite runtime bundle (`@webvpn` + `@fkn/lib` + ghostty-web + xterm-pty; the `@fkn/lib` origin is rewritten to your local fkn/web)
 - the upstream c2w `wasi-browser` worker scripts (`worker.js`, `stack-worker.js`, `browser_wasi_shim/`, `wasi-util.js`, `worker-util.js`, `ws-delegate.js`) + our `webvpn-stack-worker.js` + `webvpn-imports.js`
 
 ### 3. Serve cross-origin-isolated
@@ -77,14 +77,14 @@ node scripts/serve.cjs   # localhost:8080 with COOP=same-origin, COEP=credential
 
 `COEP: credentialless` (rather than `require-corp`) is required so the
 cross-origin `@fkn/lib` RPC iframe can load without itself sending COEP. The
-served `index.html` also runs a tiny shim that sets `iframe.credentialless =
-true` on every dynamically-created iframe.
+served `playground/index.html` also runs a tiny shim that sets
+`iframe.credentialless = true` on every dynamically-created iframe.
 
 ### 4. Open or drive headlessly
 
 Interactive:
 ```
-http://127.0.0.1:8080/?net=webvpn
+http://127.0.0.1:8080/playground/?net=webvpn
 ```
 Then in the container terminal:
 ```
@@ -104,7 +104,7 @@ from `src/`:
 
 | location                         | role                                                                  |
 | -------------------------------- | --------------------------------------------------------------------- |
-| `index.html`                     | iframe-credentialless shim, `<script type=module>` entry              |
+| `playground/index.html`          | iframe-credentialless shim, `<script type=module>` runtime entry      |
 | `src/main.ts`                    | ghostty-web init, xterm-pty + TtyServer, worker wiring                |
 | `src/stack.ts`                   | SAB-bridged message handler - first-refusal `webvpn.handle()`         |
 | `src/webvpn-netstack.ts`         | `@webvpn` TCP/UDP socket pool + per-image cache + DoH DNS             |

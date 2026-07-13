@@ -92,8 +92,9 @@ gitignored; build it locally.
 
 ## Container Lab
 
-The responsive `/playground/` UI turns the network stack into a complete browser
-demo. It supports two launches:
+The responsive `/` launcher turns the network stack into a complete browser
+demo. Starting a Dockerfile opens the runtime at `/playground/`. It supports two
+launches:
 
 * **Shell** builds the Dockerfile and opens `/bin/sh` in the resulting image.
 * **HTTP service** builds a dependency-free Alpine image, runs its default
@@ -129,7 +130,7 @@ npm ci
 npm run dev-web
 ```
 
-Open <http://localhost:1234/playground/>. The generated proxy and playground
+Open <http://localhost:1234/>. The generated proxy and playground
 WASM files under `public/` are gitignored and must already be built locally.
 
 ## Production

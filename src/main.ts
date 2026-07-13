@@ -1,4 +1,4 @@
-// Runtime entry. The page's <script type="module"> from index.html.
+// Runtime entry. The page's <script type="module"> from playground/index.html.
 //
 // Bootstraps:
 //   1. credentialless-iframes shim (so the @fkn/lib RPC iframe under our COEP
@@ -143,9 +143,9 @@ const setRuntimeStage = (stage: number, message: string, tone: 'normal' | 'error
   if (progress) progress.style.width = ((stage + 1) * 25) + '%'
 }
 
-// The credentialless-iframes shim is in index.html (synchronous inline script,
-// runs before the module so the patch is in place when @fkn/lib creates its
-// RPC iframe).
+// The credentialless-iframes shim is in playground/index.html (synchronous
+// inline script, runs before the module so the patch is in place when @fkn/lib
+// creates its RPC iframe).
 
 const getNetParam = (): { mode: NetMode; param: string | undefined } | null => {
   const qs = new URLSearchParams(location.search)

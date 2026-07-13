@@ -1,8 +1,8 @@
-// Static server for the docker-wasm runtime + playground.
+// Static server for the docker-wasm launcher + runtime.
 //
 // Serves the Vite build output:
-//   /                            runtime (build/index.html)
-//   /playground/                 drop UI (build/playground/index.html)
+//   /                            Dockerfile launcher (build/index.html)
+//   /playground/                 runtime (build/playground/index.html)
 //   /playground/playground.wasm  the c2w-built alpine+buildah image (one-time, ~150 MB)
 //   /proxy                       fkn-proxy-compatible CORS shim for in-browser
 //                                Docker Hub pulls
@@ -201,6 +201,6 @@ http.createServer((req, res) => {
     return serveFile(req, res, full, immutable)
 }).listen(port, '127.0.0.1', () => {
     console.log('docker-wasm (static + /proxy shim):')
-    console.log('  runtime : http://127.0.0.1:' + port + '/?net=webvpn')
-    console.log('  drop UI : http://127.0.0.1:' + port + '/playground/')
+    console.log('  launcher: http://127.0.0.1:' + port + '/')
+    console.log('  runtime : http://127.0.0.1:' + port + '/playground/?net=webvpn')
 })

@@ -7,10 +7,10 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  /playground/ (drop UI)                                                       │
+│  / (Dockerfile launcher)                                                      │
 │         │ base64-encode Dockerfile -> URL hash, navigate                      │
 │         ▼                                                                     │
-│  /?net=webvpn&wasm-url=<versioned-wasm-url>#dockerfile=<b64>                 │
+│  /playground/?net=webvpn&wasm-url=<versioned-url>#dockerfile=<b64>           │
 │  optional service params: publish=tcp:8080&run=default                       │
 │         │                                                                     │
 │         │   (in parallel, JS parses FROM refs from the hash and pulls each    │
@@ -76,7 +76,7 @@ Publish the generated production artifact with
 npm run dev-web
 ```
 
-Open <http://localhost:1234/playground/>. Drop or paste a Dockerfile, choose a
+Open <http://localhost:1234/>. Drop or paste a Dockerfile, choose a
 launch, and click the launch button. The JS side starts pulling FROM images
 immediately. Once Bochs boots, the auto-paste downloads the bytes from the
 netstack proxy's gateway:9090 HTTP server and runs the generated build script.

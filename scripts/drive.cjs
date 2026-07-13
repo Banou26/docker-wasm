@@ -2,7 +2,7 @@
 // capture proof. Reads xterm's buffer directly via window.xterm.
 const puppeteer = require('puppeteer-core')
 
-const url = process.env.URL || 'http://127.0.0.1:8080/?net=webvpn'
+const url = process.env.URL || 'http://127.0.0.1:8080/playground/?net=webvpn'
 const chromePath = process.env.CHROME || '/etc/profiles/per-user/banou/bin/google-chrome'
 
 const readTerminal = () => {

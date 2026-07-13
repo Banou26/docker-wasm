@@ -144,7 +144,7 @@ const run = (): void => {
     params.set(QUERY_PARAMS.publish, 'tcp:8080')
     params.set(QUERY_PARAMS.run, 'default')
   }
-  const url = '/?' + params + '#' + HASH_KEY_DOCKERFILE + '=' + b64encodeUtf8(dockerfile)
+  const url = '/playground/?' + params + '#' + HASH_KEY_DOCKERFILE + '=' + b64encodeUtf8(dockerfile)
   location.assign(url)
 }
 
