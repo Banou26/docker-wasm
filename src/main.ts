@@ -279,14 +279,18 @@ const main = async () => {
 
   const wasmUrl = queryParams.get(QUERY_PARAMS.wasmUrl)
   const wasmId = queryParams.get(QUERY_PARAMS.wasm)
+  const resolveWasmAsset = (path: string): string =>
+    new URL(withWasmAssetVersion(path), location.href).toString()
   const workerImage = wasmUrl
     ? new URL(wasmUrl, location.href).toString()
-    : location.origin + (wasmId ? '/wasm/' + wasmId + '/out.wasm' : withWasmAssetVersion('/out.wasm'))
+    : wasmId
+      ? new URL('/wasm/' + wasmId + '/out.wasm', location.href).toString()
+      : resolveWasmAsset('/out.wasm')
 
   const stackImage = netParam?.mode === 'browser'
-    ? location.origin + withWasmAssetVersion('/c2w-net-proxy.wasm')
+    ? resolveWasmAsset('/c2w-net-proxy.wasm')
     : netParam?.mode === 'webvpn'
-      ? location.origin + withWasmAssetVersion('/c2w-webvpn-proxy.wasm')
+      ? resolveWasmAsset('/c2w-webvpn-proxy.wasm')
       : null
   await Promise.all([
     assertWasmAsset(workerImage, 'Guest image'),
@@ -453,14 +457,14 @@ const main = async () => {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/stack-worker.js' + location.search),
-        location.origin + withWasmAssetVersion('/c2w-net-proxy.wasm'),
+        resolveWasmAsset('/c2w-net-proxy.wasm'),
         ensureWebvpn,
       )
     } else if (netParam.mode === 'webvpn') {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/webvpn-stack-worker.js' + location.search),
-        location.origin + withWasmAssetVersion('/c2w-webvpn-proxy.wasm'),
+        resolveWasmAsset('/c2w-webvpn-proxy.wasm'),
         ensureWebvpn,
       )
     }

@@ -1,4 +1,11 @@
 import process from 'process'
 
-Object.assign(globalThis, { process })
-void import('./main')
+const runtimeParams = new URLSearchParams(location.search)
+const hasRuntimeRequest = ['net', 'wasm-url', 'wasm'].some((name) => runtimeParams.has(name))
+
+if (location.pathname === '/' && !hasRuntimeRequest) {
+  location.replace('/playground/')
+} else {
+  Object.assign(globalThis, { process })
+  void import('./main')
+}

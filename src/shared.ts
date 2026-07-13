@@ -3,10 +3,18 @@
 // ./shared so the playground and runtime stay in lockstep.
 
 declare const __WASM_ASSET_VERSIONS__: Record<string, string>
+declare const __WASM_ASSET_BASE__: string
 
 export const withWasmAssetVersion = (url: string): string => {
   const path = url.split('?', 1)[0]!
   const version = __WASM_ASSET_VERSIONS__[path] || 'dev'
+  if (__WASM_ASSET_BASE__ && url.startsWith('/') && version !== 'dev' && version !== 'missing') {
+    const suffix = url.slice(path.length)
+    const versionedPath = path.endsWith('.wasm')
+      ? path.slice(0, -5) + '.' + version + '.wasm.js'
+      : path + '.' + version
+    return __WASM_ASSET_BASE__ + versionedPath + suffix
+  }
   const separator = url.includes('?') ? '&' : '?'
   return url + separator + 'v=' + encodeURIComponent(version)
 }

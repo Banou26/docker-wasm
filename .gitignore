@@ -8,6 +8,8 @@ node_modules/
 build/
 dist/
 .vite/
+.wrangler/
+.wasm-publish.*
 *.tsbuildinfo
 
 # Upstream c2w sources cloned into public/ during build-image.sh.

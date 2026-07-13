@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { defineConfig } from 'vite'
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { extname, join } from 'node:path'
 
@@ -24,16 +24,39 @@ const wasmAssetFiles = [
   ['/out.wasm', 'public/out.wasm'],
 ] as const
 
-const hashAsset = (file: string): Promise<string> => new Promise((resolve) => {
+const committedWasmAssetVersions = JSON.parse(
+  readFileSync(join(process.cwd(), 'wasm-assets.json'), 'utf8'),
+) as Record<string, string>
+const wasmAssetBase = (process.env.WASM_ASSET_BASE ??
+  (process.env.CF_PAGES ? 'https://container-assets.fkn.app' : '')).replace(/\/+$/, '')
+const requiredExternalWasmAssets = [
+  '/playground/playground.wasm',
+  '/c2w-webvpn-proxy.wasm',
+]
+
+if (wasmAssetBase) {
+  for (const url of requiredExternalWasmAssets) {
+    if (!committedWasmAssetVersions[url]) {
+      throw new Error('Missing committed WASM version for ' + url)
+    }
+  }
+}
+
+const hashAsset = (file: string): Promise<string | null> => new Promise((resolve) => {
   const hash = createHash('sha256')
   const stream = createReadStream(join(process.cwd(), file))
   stream.on('data', (chunk) => hash.update(chunk))
   stream.on('end', () => resolve(hash.digest('hex')))
-  stream.on('error', () => resolve('missing'))
+  stream.on('error', () => resolve(null))
 })
 
 const wasmAssetVersions = Object.fromEntries(await Promise.all(
-  wasmAssetFiles.map(async ([url, file]) => [url, await hashAsset(file)] as const),
+  wasmAssetFiles.map(async ([url, file]) => [
+    url,
+    wasmAssetBase
+      ? committedWasmAssetVersions[url] || 'missing'
+      : await hashAsset(file) || committedWasmAssetVersions[url] || 'missing',
+  ] as const),
 ))
 
 // Override the @fkn/lib iframe URL before Rollup calculates content hashes.
@@ -58,7 +81,7 @@ export default defineConfig({
         playground: 'playground/index.html',
       },
       output: {
-        entryFileNames: 'assets/[name].js',
+        entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
       },
@@ -79,6 +102,7 @@ export default defineConfig({
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
     global: 'globalThis',
+    __WASM_ASSET_BASE__: JSON.stringify(wasmAssetBase),
     __WASM_ASSET_VERSIONS__: JSON.stringify(wasmAssetVersions),
   },
   server: {

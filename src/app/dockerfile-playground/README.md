@@ -10,7 +10,7 @@ URL hash; **the FROM image is pulled live from Docker Hub through the browser**.
 │  /playground/ (drop UI)                                                       │
 │         │ base64-encode Dockerfile -> URL hash, navigate                      │
 │         ▼                                                                     │
-│  /?net=webvpn&wasm-url=/playground/playground.wasm#dockerfile=<b64>          │
+│  /?net=webvpn&wasm-url=<versioned-wasm-url>#dockerfile=<b64>                 │
 │  optional service params: publish=tcp:8080&run=default                       │
 │         │                                                                     │
 │         │   (in parallel, JS parses FROM refs from the hash and pulls each    │
@@ -40,6 +40,7 @@ the shared in-process data plane, then enter the guest through gVisor.
 - A normal dev box once, to build `playground.wasm` (Docker + Go + c2w).
 - The proxy and playground WASM artifacts must exist under `public/`. They are
   generated locally and gitignored.
+- Wrangler is required to publish production WASM assets to R2.
 - The hosted FKN API is used by default.
 
 ## Build the playground wasm (one-time, ≈ 5 min)
@@ -48,7 +49,7 @@ the shared in-process data plane, then enter the guest through gVisor.
 ./scripts/build-playground.sh
 
 # Re-stage into the served build/ (Vite copies public/ -> build/ on build):
-npm run build
+npm run vite-build
 ```
 
 `VM_MEMORY_SIZE_MB=512` is required: buildah's chroot-isolation RUN spawns a
@@ -59,10 +60,15 @@ OCI spec grants `CAP_SYS_ADMIN` and mounts a 256 MiB tmpfs at
 `/var/lib/containers/storage`, giving Buildah a native overlay graphroot without
 placing another overlay on the guest's overlay-backed root.
 
-`playground.wasm` is the only large guest artifact that ships per deployment
-(about 158 MiB raw or 57 MiB gzip: alpine + buildah + cdrkit + Bochs + a Linux
-kernel). Its versioned URL remains cached until that artifact changes; a proxy
-rebuild does not invalidate it. Dockerfiles cost zero on the build side.
+`playground.wasm` is about 158 MiB raw or 57 MiB gzip (alpine + buildah +
+cdrkit + Bochs + a Linux kernel). Production stores the encoded artifact in R2
+because it exceeds the Cloudflare Pages file limit. Its versioned URL remains
+cached until that artifact changes; a proxy rebuild does not invalidate it.
+Dockerfiles cost zero on the build side.
+
+Publish the generated production artifact with
+`npm run publish-wasm-assets -- playground`, then commit the refreshed
+`wasm-assets.json` before pushing the Pages application.
 
 ## Run
 

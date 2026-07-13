@@ -111,25 +111,49 @@ The console records the real `fetchContainer(url)` call, virtual route, response
 time, HTTP status, headers, and returned body. The request button runs the same
 path again so repeated responses remain visible.
 
-The launcher streams its generated build script into the guest PTY in 256-byte
-chunks at a bounded rate; a large or fast terminal paste can truncate a long
-Dockerfile payload. The dependency-free HTTP preset has no `RUN` layer. Its
-default command creates a small response helper at startup and uses a BusyBox
-`nc` accept loop, keeping repeated requests stable inside the nested runtime.
+The launcher sends a short command through the guest PTY, then downloads the
+generated build script from the netstack's local artifact bridge. The
+dependency-free HTTP preset has no `RUN` layer. Its default command creates a
+small response helper at startup and uses a BusyBox `nc` accept loop, keeping
+repeated requests stable inside the nested runtime.
 
-Production builds precompress the guest and proxy WASM with gzip. Each WASM URL
-has its own content digest, so `scripts/serve.cjs` can cache it as
-immutable without a proxy-only rebuild invalidating the much larger guest. The
-workers compile directly from the response stream. Stable asset URLs revalidate
-with ETags, while Vite's hashed assets are immutable.
+Production stores gzip-encoded guest and proxy WASM in R2 at
+`container-assets.fkn.app`. Each URL carries its own content digest, so a
+proxy-only rebuild does not invalidate the much larger guest. Workers compile
+directly from the decoded response stream. R2 retains digest-bearing object
+keys for rollback safety, and Vite's hashed assets are immutable.
 
 ```sh
-npm install
+npm ci
 npm run dev-web
 ```
 
 Open <http://localhost:1234/playground/>. The generated proxy and playground
 WASM files under `public/` are gitignored and must already be built locally.
+
+## Production
+
+`container.fkn.app` is a Cloudflare Pages project built with
+`npm run build:pages`. Pages serves the application and isolation headers. The
+generated WASM files exceed Pages' per-file limit, so a dedicated
+`fkn-container-assets` R2 bucket serves them through
+`container-assets.fkn.app` with public read CORS.
+
+After rebuilding an artifact, publish that compressed object and atomically
+refresh `wasm-assets.json` only after the public object passes metadata and
+digest checks:
+
+```sh
+npm run publish-wasm-assets -- playground
+# or: npm run publish-wasm-assets -- proxy
+git add wasm-assets.json
+```
+
+Commit the updated manifest before pushing the application. Cloudflare Pages
+builds use the committed digests because generated WASM remains gitignored.
+Local Vite builds keep using the same-origin files under `public/`. Wrangler is
+pinned in the development dependencies; noninteractive publication requires
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
 ## Wiring into container2wasm's frontend
 
@@ -172,7 +196,7 @@ Because the guest reaches the internet directly (not through a TLS-terminating
 HTTP proxy), you can also drop the `*_proxy` / `SSL_CERT_FILE` env vars that the
 fetch-based example pre-configures.
 
-Cross-origin isolation (`COOP: same-origin` + `COEP: require-corp`) is required
+Cross-origin isolation (`COOP: same-origin` + `COEP: credentialless`) is required
 for `SharedArrayBuffer`, the same requirement container2wasm already has.
 
 ## Example: alpine + curl
