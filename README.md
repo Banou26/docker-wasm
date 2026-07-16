@@ -96,63 +96,90 @@ The responsive `/` launcher turns the network stack into a complete browser
 demo. Starting a Dockerfile opens the runtime at `/playground/`. It supports two
 launches:
 
-* **Shell** builds the Dockerfile and opens `/bin/sh` in the resulting image.
-* **HTTP service** builds a dependency-free Alpine image, runs its default
-  command, maps guest TCP port 8080 to an FKN virtual port, and sends `GET /`
-  through the in-process FKN HTTP path.
+* **Shell** opens `/bin/sh` in an Alpine image with curl.
+* **HTTP service** runs a dependency-free Alpine service, maps guest TCP port
+  8080 to an FKN virtual port, and sends `GET /` through the in-process FKN
+  HTTP path.
+
+Each canonical example is built ahead of time as its own container2wasm
+runtime. An exact source and mode match boots that image directly, skipping the
+builder guest, registry pulls, and Buildah. Any source edit, including boundary
+whitespace, keeps the existing live registry and Dockerfile build path. The
+launcher starts warming the selected immutable preset WASM when the user points
+at or focuses a preset launch, and the runtime reuses the browser cache after
+navigation.
 
 The service launch uses `?publish=tcp:8080&run=default`. `publish` binds an FKN
-loopback listener and maps accepted sockets into the guest. `run=default`
-combines the image entrypoint and command instead of replacing them with
-`/bin/sh`. The runtime waits for a guest-local HTTP response before starting an
-`@fkn/lib/http` request to the returned virtual port.
+loopback listener and maps accepted sockets into the guest. The dedicated HTTP
+runtime starts its embedded image command. For edited source, `run=default`
+combines the built image entrypoint and command instead of replacing them with
+`/bin/sh`. The runtime probes the service through `@fkn/lib/http` and keeps
+retrying cold preset starts for up to five minutes.
 
 HTTP mode places the Docker guest logs beside a live browser JavaScript console.
 The console records the real `fetchContainer(url)` call, virtual route, response
 time, HTTP status, headers, and returned body. The request button runs the same
-path again so repeated responses remain visible.
+path again with a bounded retry for transient ingress setup delays, so repeated
+responses remain visible. Readiness attempts stay behind the initial logical
+fetch, and each settled request closes its virtual TCP socket before the next
+request reuses the ingress capacity.
 
-The launcher sends a short command through the guest PTY, then downloads the
-generated build script from the netstack's local artifact bridge. The
-dependency-free HTTP preset has no `RUN` layer. Its default command creates a
-small response helper at startup and uses a BusyBox `nc` accept loop, keeping
-repeated requests stable inside the nested runtime.
+For edited source, the launcher sends a short command through the builder guest
+PTY, then downloads the generated runtime script from the netstack's local
+artifact bridge. Exact presets do not use that script or nested Buildah. The
+HTTP image's default command creates a small response helper at startup and
+uses one persistent BusyBox `nc -lk` listener. The helper consumes the complete
+request headers before responding. Startup and every accepted request are
+written to the guest TTY.
 
-Production stores gzip-encoded guest and proxy WASM in R2. A read-only Pages
-Function serves those objects from `container.fkn.app/wasm-assets/`, so every
-browser request remains same-origin. Each URL carries its own content digest,
-so a proxy-only rebuild does not invalidate the much larger guest. Workers
-compile directly from the decoded response stream. R2 retains digest-bearing
-object keys for rollback safety, and Vite's hashed assets are immutable.
+Production stores the gzip-encoded builder guest, proxy WASM, and two preset
+runtimes in R2. A read-only Pages Function serves those objects from
+`container.fkn.app/wasm-assets/`, so every browser request remains same-origin.
+Each URL carries its own content digest, so rebuilding one artifact does not
+invalidate the others. Workers compile WASM directly from the decoded response
+stream. R2 retains digest-bearing object keys for rollback safety, and Vite's
+hashed assets are immutable.
 
 ```sh
 npm ci
 npm run dev-web
 ```
 
-Open <http://localhost:1234/>. The generated proxy and playground
-WASM files under `public/` are gitignored and must already be built locally.
+Open <http://localhost:1234/>. The generated proxy, builder, and preset WASM
+files under `public/` are gitignored and must already be built locally. Run
+`npm run build-presets` before local preset testing.
 
 ## Production
 
 `container.fkn.app` is a Cloudflare Pages project built with
 `npm run build:pages`. Pages serves the application and isolation headers. The
-generated WASM files exceed Pages' per-file limit, so a dedicated
-`fkn-container-assets` R2 bucket is bound to a read-only Pages Function at
-`/wasm-assets/*`. The bucket has no public hostname or CORS configuration.
+generated WASM and preset artifacts are kept outside the Pages output, so a
+dedicated `fkn-container-assets` R2 bucket is bound to a read-only Pages
+Function at `/wasm-assets/*`. The bucket has no public hostname or CORS
+configuration.
 
-After rebuilding an artifact, publish that compressed object and atomically
-refresh `wasm-assets.json` only after the public object passes metadata and
-digest checks:
+After rebuilding an artifact, publish that compressed object and advance its
+committed manifests only after the R2 object passes metadata and digest checks:
 
 ```sh
 npm run publish-wasm-assets -- playground
 # or: npm run publish-wasm-assets -- proxy
-git add wasm-assets.json
+# or: npm run build-presets && npm run publish-wasm-assets -- presets
+git add wasm-assets.json preset-assets.json
 ```
 
-Commit the updated manifest before pushing the application. Cloudflare Pages
-builds use the committed digests because generated WASM remains gitignored.
+`npm run build-presets` compiles the c2w CLI from pinned container2wasm v0.8.4
+source, gives each image a build-unique tag, and converts both `linux/amd64`
+images at the default 128 MiB guest memory size. Verification binds each WASM
+digest to its canonical Dockerfile, compiles the module, and checks the c2w and
+WASI interface. `npm run build:pages` also requires `preset-assets.json` to
+match both canonical sources and the committed artifact digests. For the
+initial rollout of a new allowlisted route, use
+`ALLOW_PENDING_ASSET_ROUTE=1` only after the Pages Function change is ready,
+then rerun publication without it after deployment to verify the public route.
+
+Commit both updated manifests before pushing the application. Cloudflare Pages
+builds use the committed digests because generated artifacts remain gitignored.
 Local Vite builds keep using the same-origin files under `public/`. Wrangler is
 pinned in the development dependencies; noninteractive publication requires
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.

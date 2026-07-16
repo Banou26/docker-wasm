@@ -25,11 +25,10 @@
       <main>
         <section class="hero" aria-labelledby="hero-title">
           <div>
-            <p class="eyebrow">Linux, packed into a browser tab</p>
-            <h1 id="hero-title">Build the image.<br><em>Keep the shell.</em></h1>
+            <h1 id="hero-title">Run your native HTTP server in your browser.<br><em>Fetch it from your web app.</em></h1>
           </div>
           <div class="hero-copy">
-            <p>Paste a Dockerfile. The tab boots Linux in WebAssembly, pulls the base image through FKN, builds it with Buildah, and hands you the resulting container.</p>
+            <p>Paste a Dockerfile. The tab boots an exact built-in image directly, or pulls your base image through FKN and prepares edited source with Buildah.</p>
             <div class="hero-facts" aria-label="Runtime facts">
               <span><strong>0</strong> build servers</span>
               <span><strong>1</strong> browser tab</span>
@@ -74,8 +73,8 @@ CMD ["/bin/sh"]</textarea>
             </div>
             <ol class="flight-plan">
               <li><span>01</span><div><strong>Boot</strong><small>Linux x86 guest in WASM</small></div></li>
-              <li><span>02</span><div><strong>Pull</strong><small>OCI layers through FKN</small></div></li>
-              <li><span>03</span><div><strong>Build</strong><small>Buildah with live networking</small></div></li>
+              <li><span>02</span><div><strong>Load</strong><small>Dedicated runtime or OCI layers</small></div></li>
+              <li><span>03</span><div><strong>Prepare</strong><small>Direct image or Buildah</small></div></li>
               <li><span>04</span><div><strong id="final-stage-title">Open</strong><small id="final-stage-copy">Your container shell</small></div></li>
             </ol>
             <div class="mode-picker">
@@ -84,13 +83,13 @@ CMD ["/bin/sh"]</textarea>
                 <button class="is-active" type="button" data-demo-mode="shell" aria-pressed="true">Shell</button>
                 <button type="button" data-demo-mode="http" aria-pressed="false">HTTP service</button>
               </div>
-              <small id="mode-copy">Build the image, then work inside its shell.</small>
+              <small id="mode-copy">Open the image as an interactive shell.</small>
             </div>
             <button id="run-btn" type="button">
-              <span id="run-label">Boot this Dockerfile</span>
+              <span id="run-label">Launch container shell</span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
             </button>
-            <p class="launch-note">The first run downloads a 158 MB guest and can take a few minutes. Keep this tab open.</p>
+            <p class="launch-note">The first run downloads a Linux runtime. Exact examples start directly; edited Dockerfiles take longer.</p>
           </aside>
         </section>
 

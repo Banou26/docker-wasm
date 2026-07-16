@@ -55,8 +55,8 @@
           </div>
           <ol class="runtime-stages">
             <li class="is-active" data-runtime-stage="0"><span>01</span><div><strong>Boot guest</strong><small>Linux in WebAssembly</small></div></li>
-            <li data-runtime-stage="1"><span>02</span><div><strong>Pull image</strong><small>OCI through FKN</small></div></li>
-            <li data-runtime-stage="2"><span>03</span><div><strong>Build layers</strong><small>Buildah in the guest</small></div></li>
+            <li data-runtime-stage="1"><span>02</span><div><strong>Load runtime</strong><small>Dedicated image or OCI layers</small></div></li>
+            <li data-runtime-stage="2"><span>03</span><div><strong>Prepare workload</strong><small>Direct launch or Buildah</small></div></li>
             <li data-runtime-stage="3"><span>04</span><div><strong id="runtime-final-title">Open shell</strong><small id="runtime-final-copy">Interactive container</small></div></li>
           </ol>
           <div class="rail-note">
@@ -78,7 +78,7 @@
             </div>
             <div class="service-result">
               <span>Browser request</span>
-              <output id="service-result">Waiting for the image build</output>
+              <output id="service-result">Waiting for the guest service</output>
             </div>
             <button id="service-probe" type="button" disabled>Run fetch again</button>
           </section>

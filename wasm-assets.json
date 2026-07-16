@@ -1,4 +1,6 @@
 {
   "/playground/playground.wasm": "5cea5f62207ffe0ebbd428e9436413ce1b82931aa2d1ce2ebd51be87c4ca352b",
-  "/c2w-webvpn-proxy.wasm": "1d2f30bf60789776161a23638c08d8b8e599a062a9c9ceef0299ae7dd3509120"
+  "/c2w-webvpn-proxy.wasm": "1d2f30bf60789776161a23638c08d8b8e599a062a9c9ceef0299ae7dd3509120",
+  "/presets/shell.wasm": "16c328a2985be607f346d5630fffd840c3cc0edf2d096ca7ea10082635c657c6",
+  "/presets/http.wasm": "7463fafeb36477c596d64116bd0447b267a8f2ed4cdaf5a66f6bb2818f51fbf8"
 }

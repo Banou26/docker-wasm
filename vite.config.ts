@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { defineConfig } from 'vite'
-import { createReadStream, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { extname, join } from 'node:path'
 
@@ -22,22 +22,75 @@ const wasmAssetFiles = [
   ['/c2w-webvpn-proxy.wasm', 'public/c2w-webvpn-proxy.wasm'],
   ['/c2w-net-proxy.wasm', 'public/c2w-net-proxy.wasm'],
   ['/out.wasm', 'public/out.wasm'],
+  ['/presets/shell.wasm', 'public/presets/shell.wasm'],
+  ['/presets/http.wasm', 'public/presets/http.wasm'],
 ] as const
 
 const committedWasmAssetVersions = JSON.parse(
   readFileSync(join(process.cwd(), 'wasm-assets.json'), 'utf8'),
 ) as Record<string, string>
+type PresetArtifactRecord = {
+  dockerfile: string
+  dockerfileSha256: string
+  wasmSha256: string
+  platform: string
+}
+type PresetAssetManifest = {
+  schemaVersion: number
+  container2wasm: { version: string; commit: string }
+  artifacts: Record<'shell' | 'http', PresetArtifactRecord>
+}
+const committedPresetAssets = JSON.parse(
+  readFileSync(join(process.cwd(), 'preset-assets.json'), 'utf8'),
+) as PresetAssetManifest
 const wasmAssetBase = (process.env.WASM_ASSET_BASE ??
   (process.env.CF_PAGES ? '/wasm-assets' : '')).replace(/\/+$/, '')
 const requiredExternalWasmAssets = [
   '/playground/playground.wasm',
   '/c2w-webvpn-proxy.wasm',
+  '/presets/shell.wasm',
+  '/presets/http.wasm',
 ]
+const digestPattern = /^[0-9a-f]{64}$/
+const presetSources = {
+  shell: 'src/app/dockerfile-playground/presets/shell.Dockerfile',
+  http: 'src/app/dockerfile-playground/presets/http.Dockerfile',
+} as const
+const localPresetFiles = [
+  'public/presets/preset-assets.json',
+  'public/presets/shell.wasm',
+  'public/presets/http.wasm',
+]
+const localPresetWatchFiles = new Set([
+  ...localPresetFiles,
+  ...Object.values(presetSources),
+].map((file) => join(process.cwd(), file)))
+
+const validatePresetAssets = (
+  label: string,
+  manifest: PresetAssetManifest,
+  versions: Record<string, string>,
+): void => {
+  if (manifest.schemaVersion !== 1 ||
+      manifest.container2wasm.version !== 'v0.8.4' ||
+      manifest.container2wasm.commit !== '6ed3d98882a2b22eafc1334f574c364a5b2b8c47') {
+    throw new Error(label + ' preset metadata has an invalid converter revision')
+  }
+  for (const [name, source] of Object.entries(presetSources) as Array<['shell' | 'http', string]>) {
+    const record = manifest.artifacts[name]
+    const sourceDigest = createHash('sha256').update(readFileSync(join(process.cwd(), source))).digest('hex')
+    if (!record || record.dockerfile !== name + '.Dockerfile' || record.platform !== 'linux/amd64' ||
+        record.dockerfileSha256 !== sourceDigest || !digestPattern.test(record.wasmSha256) ||
+        record.wasmSha256 !== versions['/presets/' + name + '.wasm']) {
+      throw new Error(label + ' ' + name + ' preset does not match its canonical source and WASM digest')
+    }
+  }
+}
 
 if (wasmAssetBase) {
   for (const url of requiredExternalWasmAssets) {
-    if (!committedWasmAssetVersions[url]) {
-      throw new Error('Missing committed WASM version for ' + url)
+    if (!digestPattern.test(committedWasmAssetVersions[url] || '')) {
+      throw new Error('Missing or invalid committed asset version for ' + url)
     }
   }
 }
@@ -50,6 +103,23 @@ const hashAsset = (file: string): Promise<string | null> => new Promise((resolve
   stream.on('error', () => resolve(null))
 })
 
+const validateLocalPresetFiles = async (): Promise<Record<string, string>> => {
+  if (!localPresetFiles.every((file) => existsSync(join(process.cwd(), file)))) {
+    throw new Error('Local preset artifacts are incomplete; run npm run build-presets')
+  }
+  const versions: Record<string, string> = {}
+  for (const name of ['shell', 'http'] as const) {
+    const digest = await hashAsset('public/presets/' + name + '.wasm')
+    if (!digest) throw new Error('Missing local ' + name + ' preset WASM')
+    versions['/presets/' + name + '.wasm'] = digest
+  }
+  const manifest = JSON.parse(
+    readFileSync(join(process.cwd(), localPresetFiles[0]!), 'utf8'),
+  ) as PresetAssetManifest
+  validatePresetAssets('Local', manifest, versions)
+  return versions
+}
+
 const wasmAssetVersions = Object.fromEntries(await Promise.all(
   wasmAssetFiles.map(async ([url, file]) => [
     url,
@@ -58,6 +128,18 @@ const wasmAssetVersions = Object.fromEntries(await Promise.all(
       : await hashAsset(file) || committedWasmAssetVersions[url] || 'missing',
   ] as const),
 ))
+
+if (wasmAssetBase) {
+  validatePresetAssets('Committed', committedPresetAssets, wasmAssetVersions)
+} else {
+  if (!localPresetFiles.every((file) => existsSync(join(process.cwd(), file)))) {
+    throw new Error('Local preset artifacts are incomplete; run npm run build-presets')
+  }
+  const localPresetAssets = JSON.parse(
+    readFileSync(join(process.cwd(), localPresetFiles[0]!), 'utf8'),
+  ) as PresetAssetManifest
+  validatePresetAssets('Local', localPresetAssets, wasmAssetVersions)
+}
 
 // Override the @fkn/lib iframe URL before Rollup calculates content hashes.
 // Set FKN_API=http://127.0.0.1:1234/api.html for a fully-local fkn/web dev
@@ -112,6 +194,53 @@ export default defineConfig({
     headers: devHeaders,
   },
   plugins: [
+    {
+      name: 'validate-local-presets',
+      buildStart: async function () {
+        if (wasmAssetBase) return
+        for (const file of localPresetWatchFiles) this.addWatchFile(file)
+        const currentVersions = await validateLocalPresetFiles()
+        for (const name of ['shell', 'http'] as const) {
+          const path = '/presets/' + name + '.wasm'
+          if (currentVersions[path] !== wasmAssetVersions[path]) {
+            throw new Error('Local preset digests changed; restart the Vite build watch')
+          }
+        }
+      },
+      configureServer: (server) => {
+        if (wasmAssetBase) return
+        let restartTimer: ReturnType<typeof setTimeout> | null = null
+        let validationGeneration = 0
+        let validationError: Error | null = null
+
+        server.middlewares.use((_request, response, next) => {
+          if (!validationError) return next()
+          response.statusCode = 503
+          response.setHeader('Content-Type', 'text/plain; charset=utf-8')
+          response.end(validationError.message + '\n')
+        })
+        server.watcher.add([...localPresetWatchFiles])
+        server.watcher.on('all', (_event, file) => {
+          if (!localPresetWatchFiles.has(file)) return
+          const generation = ++validationGeneration
+          if (restartTimer) clearTimeout(restartTimer)
+          restartTimer = setTimeout(() => {
+            void validateLocalPresetFiles().then(async () => {
+              if (generation !== validationGeneration) return
+              validationError = null
+              await server.restart()
+            }, (error: unknown) => {
+              if (generation !== validationGeneration) return
+              validationError = error instanceof Error ? error : new Error(String(error))
+              server.config.logger.error(validationError.message, { timestamp: true })
+            })
+          }, 300)
+        })
+      },
+      handleHotUpdate: (context) => {
+        if (!wasmAssetBase && localPresetWatchFiles.has(context.file)) return []
+      },
+    },
     {
       name: 'fkn-api-url',
       enforce: 'pre',

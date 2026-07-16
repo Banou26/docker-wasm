@@ -9,9 +9,9 @@
 //   4. The c2w WASI worker (classic worker at /worker.js) and the netstack-
 //      proxy worker (classic worker at /webvpn-stack-worker.js) when
 //      ?net=webvpn / browser / delegate.
-//   5. Auto-paste path: if the URL hash carries `#dockerfile=<base64>`, kick
-//      off Docker Hub pulls for each FROM ref immediately, then type a build
-//      script into the shell when its prompt appears.
+//   5. Exact built-in examples boot their dedicated container WASM. Other URL
+//      hash Dockerfiles pull each FROM ref, then run the generated guest script
+//      when the builder shell prompt appears.
 
 import { init, Terminal, FitAddon } from 'ghostty-web'
 import {
@@ -27,6 +27,12 @@ import { newStack } from './stack'
 import { createWebvpnNetstack } from './webvpn-netstack'
 import { pullImage, dockerfileFromRefs } from './registry'
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
+import {
+  isPresetWasmURL,
+  matchPreset,
+  PRESET_RUNTIME_TIMEOUT_MS,
+  PRESET_WASM_PATHS,
+} from './presets'
 
 // Loaded into globals by /ws-delegate.js (kept as a static asset under public/).
 declare const delegate: (worker: Worker, image: string, address: string) => (msg: MessageEvent) => void
@@ -80,6 +86,7 @@ const fetchContainer = async (url: URL): Promise<VirtualHTTPResponse> => {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      req.destroy()
       callback()
     }
     const req = request({
@@ -114,7 +121,6 @@ const fetchContainer = async (url: URL): Promise<VirtualHTTPResponse> => {
     })
     req.on('error', (error) => finish(() => reject(error)))
     timer = setTimeout(() => {
-      req.destroy()
       finish(() => reject(new Error('HTTP request timed out')))
     }, 5_000)
     req.end()
@@ -164,6 +170,9 @@ const assertWasmAsset = async (url: string, label: string): Promise<void> => {
   }
 }
 
+const resolveVersionedAsset = (path: string): string =>
+  new URL(withWasmAssetVersion(path), location.href).toString()
+
 const main = async () => {
   const queryParams = new URLSearchParams(location.search)
   const publishSpec = getPublishSpec(queryParams)
@@ -194,6 +203,11 @@ const main = async () => {
   if (serviceMode && dockerfileText === null) {
     throw new Error('virtual service mode requires a Dockerfile')
   }
+
+  const preset = dockerfileText === null ? null : matchPreset(dockerfileText, publishSpec?.guestPort ?? null)
+  // The netstack bridge waits on entries in this cache when the guest requests
+  // an image archive or generated script from its local gateway.
+  const imageCache: ImageCache = new Map()
 
   const servicePanel = document.getElementById('service-panel')
   const serviceEndpoint = document.getElementById('service-endpoint')
@@ -256,6 +270,7 @@ const main = async () => {
   const runtimeMarkers = {
     buildOk: false,
     buildFailed: false,
+    runFailed: false,
     serviceReady: false,
     serviceFailed: false,
   }
@@ -265,6 +280,7 @@ const main = async () => {
     const output = markerTail + markerDecoder.decode(bytes, { stream: true })
     runtimeMarkers.buildOk ||= output.includes('__FKN_BUILD_OK__')
     runtimeMarkers.buildFailed ||= output.includes('__FKN_BUILD_FAILED__')
+    runtimeMarkers.runFailed ||= output.includes('__FKN_RUN_FAILED__')
     runtimeMarkers.serviceReady ||= output.includes('__FKN_SERVICE_READY__')
     runtimeMarkers.serviceFailed ||= output.includes('__FKN_SERVICE_FAILED__')
     markerTail = output.slice(-256)
@@ -279,18 +295,20 @@ const main = async () => {
 
   const wasmUrl = queryParams.get(QUERY_PARAMS.wasmUrl)
   const wasmId = queryParams.get(QUERY_PARAMS.wasm)
-  const resolveWasmAsset = (path: string): string =>
-    new URL(withWasmAssetVersion(path), location.href).toString()
-  const workerImage = wasmUrl
-    ? new URL(wasmUrl, location.href).toString()
-    : wasmId
-      ? new URL('/wasm/' + wasmId + '/out.wasm', location.href).toString()
-      : resolveWasmAsset('/out.wasm')
+  const workerImage = preset
+    ? resolveVersionedAsset(PRESET_WASM_PATHS[preset])
+    : wasmUrl
+      ? isPresetWasmURL(wasmUrl)
+        ? resolveVersionedAsset('/playground/playground.wasm')
+        : new URL(wasmUrl, location.href).toString()
+      : wasmId
+        ? new URL('/wasm/' + wasmId + '/out.wasm', location.href).toString()
+        : resolveVersionedAsset('/out.wasm')
 
   const stackImage = netParam?.mode === 'browser'
-    ? resolveWasmAsset('/c2w-net-proxy.wasm')
+    ? resolveVersionedAsset('/c2w-net-proxy.wasm')
     : netParam?.mode === 'webvpn'
-      ? resolveWasmAsset('/c2w-webvpn-proxy.wasm')
+      ? resolveVersionedAsset('/c2w-webvpn-proxy.wasm')
       : null
   await Promise.all([
     assertWasmAsset(workerImage, 'Guest image'),
@@ -298,11 +316,6 @@ const main = async () => {
   ])
   markRuntimeTiming('wasm-assets-validated')
   setRuntimeStage(0, 'Booting Linux guest')
-
-  // Artifact cache populated below from #dockerfile=<b64> in the URL hash.
-  // createWebvpnNetstack reads from it when the proxy worker requests an
-  // image_size or image_chunk for a FROM ref or generated build script.
-  const imageCache: ImageCache = new Map()
 
   // c2w-webvpn lazy init: build the netstack the first time a webvpn_* arrives.
   let webvpn: Netstack | null = null
@@ -382,26 +395,27 @@ const main = async () => {
 
   const worker = new Worker('/worker.js' + location.search)
 
-  const probeService = async (retry: boolean): Promise<void> => {
+  const probeService = async (retryForMs: number, startup = false): Promise<void> => {
     if (!virtualPortPromise || !serviceResult || !serviceProbe || probeInFlight) return
     probeInFlight = true
     serviceProbe.disabled = true
-    let lastError: unknown = new Error('service did not respond')
+    const retryDeadline = performance.now() + retryForMs
     try {
       const virtualPort = await virtualPortPromise
       const url = getVirtualHTTPURL(virtualPort)
-      const attempts = retry ? 8 : 1
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        browserRequestCount++
-        if (browserRequestCount > 1) {
-          writeBrowserConsole('//', 'Request ' + browserRequestCount, 'comment')
-        }
-        writeBrowserConsole('>', 'response = await fetchContainer(url)', 'command')
-        writeBrowserConsole('->', 'GET ' + url.pathname + ' -> Docker guest :' + virtualPort.guestPort, 'route')
+      let attempt = 0
+      browserRequestCount++
+      if (browserRequestCount > 1) {
+        writeBrowserConsole('//', 'Request ' + browserRequestCount, 'comment')
+      }
+      writeBrowserConsole('>', 'response = await fetchContainer(url)', 'command')
+      writeBrowserConsole('->', 'GET ' + url.pathname + ' -> Docker guest :' + virtualPort.guestPort, 'route')
+      while (true) {
         setBrowserConsoleState('Fetching', 'fetching')
         try {
           serviceResult.textContent = attempt === 0 ? 'Sending GET /' : 'Waiting for guest service, retry ' + attempt
           const response = await fetchContainer(url)
+          markRuntimeTiming('guest-service-ready')
           markRuntimeTiming('first-http-response')
           serviceResult.textContent = response.status + (response.statusText ? ' ' + response.statusText : '') +
             ' / ' + response.elapsedMs + ' ms'
@@ -427,26 +441,32 @@ const main = async () => {
           setRuntimeStage(3, 'HTTP service reachable through FKN in-process')
           return
         } catch (error) {
-          lastError = error
-          writeBrowserConsole('!', String(error), 'error')
-          if (attempt + 1 < attempts) {
-            setBrowserConsoleState('Retrying', 'waiting')
-            await new Promise((resolve) => setTimeout(resolve, 2_000))
+          const canRetry = retryForMs > 0 && performance.now() < retryDeadline
+          if (!canRetry) {
+            writeBrowserConsole('!', String(error), 'error')
+            throw error
           }
+          if (startup) {
+            setBrowserConsoleState('Waiting for guest service', 'waiting')
+          } else {
+            writeBrowserConsole('//', 'No response yet; retrying', 'comment')
+            setBrowserConsoleState('Retrying', 'waiting')
+          }
+          await new Promise((resolve) => setTimeout(resolve, startup ? 2_000 : 250))
+          attempt++
         }
       }
-      throw lastError
     } catch (error) {
       serviceResult.textContent = 'Request failed: ' + error
       setBrowserConsoleState('Fetch failed', 'error')
-      if (retry) setRuntimeStage(3, 'HTTP request did not complete')
+      if (startup) setRuntimeStage(3, 'HTTP request did not complete')
     } finally {
       probeInFlight = false
       serviceProbe.disabled = false
     }
   }
 
-  if (serviceProbe) serviceProbe.addEventListener('click', () => { void probeService(false) })
+  if (serviceProbe) serviceProbe.addEventListener('click', () => { void probeService(12_000) })
 
   let nwStack: ((msg: MessageEvent) => void) | undefined
   if (netParam) {
@@ -457,14 +477,14 @@ const main = async () => {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/stack-worker.js' + location.search),
-        resolveWasmAsset('/c2w-net-proxy.wasm'),
+        resolveVersionedAsset('/c2w-net-proxy.wasm'),
         ensureWebvpn,
       )
     } else if (netParam.mode === 'webvpn') {
       nwStack = newStack(
         worker, workerImage,
         new Worker('/webvpn-stack-worker.js' + location.search),
-        resolveWasmAsset('/c2w-webvpn-proxy.wasm'),
+        resolveVersionedAsset('/c2w-webvpn-proxy.wasm'),
         ensureWebvpn,
       )
     }
@@ -490,10 +510,8 @@ const main = async () => {
       .join('\n')
   }
 
-  // In-browser dockerfile playground: if location.hash carries a base64
-  // Dockerfile, kick off the FROM-image pulls in JS right now (so the netstack
-  // proxy's gateway HTTP server has bytes ready by the time the guest wget's
-  // them), then run the generated build script when the shell prompt appears.
+  // Exact examples are complete container2wasm images, so they need no nested
+  // Buildah import. Other Dockerfiles keep the registry and builder path.
   if (dockerfileText === null || dockerfileB64 === null) {
     const promptTimer = setInterval(() => {
       if (!/# *$/.test(terminalTail(2).trimEnd())) return
@@ -504,13 +522,35 @@ const main = async () => {
     return
   }
 
+  if (preset) {
+    markRuntimeTiming('preset-runtime-started')
+    if (serviceMode) {
+      setRuntimeStage(1, 'Dedicated HTTP runtime selected')
+      setRuntimeStage(2, 'Starting HTTP service')
+      if (serviceResult) serviceResult.textContent = 'Waiting for guest service on :' + publishSpec?.guestPort
+      void probeService(PRESET_RUNTIME_TIMEOUT_MS, true)
+      return
+    }
+
+    setRuntimeStage(1, 'Dedicated shell runtime selected')
+    setRuntimeStage(2, 'Starting container shell')
+    const promptTimer = setInterval(() => {
+      if (!/# *$/.test(terminalTail(2).trimEnd())) return
+      clearInterval(promptTimer)
+      markRuntimeTiming('guest-shell-ready')
+      markRuntimeTiming('container-shell-ready')
+      setRuntimeStage(3, 'Container shell ready')
+    }, 500)
+    return
+  }
+
   // Re-pad for the in-guest busybox base64 -d which is strict about padding.
   let dockerfileB64Padded = dockerfileB64
   while (dockerfileB64Padded.length % 4) dockerfileB64Padded += '='
 
   const refs = dockerfileFromRefs(dockerfileText)
-  // The compact HTTP preset can run Buildah's final working container without
-  // creating another container from the completed image.
+  // A compact custom HTTP Dockerfile can run Buildah's final working container
+  // without creating another container from the completed image.
   const instructions: string[] = []
   const parsedInstructions = dockerfileText.split('\n').every((line) => {
     const trimmed = line.trim()
@@ -519,7 +559,8 @@ const main = async () => {
     if (instruction) instructions.push(instruction)
     return instruction !== undefined
   })
-  const canReuseBuildContainer = parsedInstructions && instructions.join(',') === 'FROM,EXPOSE,CMD'
+  const canReuseBuildContainer = parsedInstructions &&
+    instructions.join(',') === 'FROM,EXPOSE,CMD'
   if (refs.length === 0) markRuntimeTiming('base-images-ready')
   setRuntimeStage(1, refs.length === 0
     ? 'No base image pull required'
@@ -553,29 +594,32 @@ const main = async () => {
     '[storage.options.overlay]\\n' +
     'mountopt = "nodev"\\n'
 
-  let pullBlock = ''
+  let imageLoadBlock = ''
   for (const ref of refs) {
     const enc = encodeURIComponent(ref)
     const safe = ref.replace(/[^A-Za-z0-9._-]/g, '_')
-    pullBlock +=
+    imageLoadBlock +=
       'echo "== pull ' + ref + ' =="\n' +
       "wget -q 'http://192.168.127.1:9090/img/" + enc + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
       'buildah pull docker-archive:/tmp/' + safe + '.tar\n' +
       'rm -f /tmp/' + safe + '.tar\n'
   }
-  const buildCommands =
-    'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
-    "printf 'nameserver 192.168.127.1\\n' > /etc/resolv.conf\n" +
-    "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
-    pullBlock +
+  const imagePreparation =
     "echo '" + dockerfileB64Padded + "' | base64 -d > Dockerfile\n" +
     'echo == buildah build ==\n' +
     'buildah bud' + (canReuseBuildContainer ? ' --layers --rm=false' : '') +
     ' --isolation chroot --network host --pull=never -t userimg .\n' +
     'echo == build complete ==\n'
+  const buildCommands =
+    'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
+    "printf 'nameserver 192.168.127.1\\n' > /etc/resolv.conf\n" +
+    "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
+    imageLoadBlock +
+    imagePreparation
+  const targetImageSetup = '  target_image=userimg\n'
   const defaultCommandSetup = runImageDefault
     ? 'cmdfile=/tmp/fkn-image-command\n' +
-      'buildah inspect --type image --format \'{{range .Docker.Config.Entrypoint}}{{printf "%s%c" . 0}}{{end}}{{range .Docker.Config.Cmd}}{{printf "%s%c" . 0}}{{end}}\' userimg > "$cmdfile"\n' +
+      'buildah inspect --type image --format \'{{range .Docker.Config.Entrypoint}}{{printf "%s%c" . 0}}{{end}}{{range .Docker.Config.Cmd}}{{printf "%s%c" . 0}}{{end}}\' "$target_image" > "$cmdfile"\n' +
       'set --\n' +
       'while IFS= read -r -d \'\' arg; do set -- "$@" "$arg"; done < "$cmdfile"\n' +
       '[ "$#" -gt 0 ] || { echo "image has no default command" >&2; echo __FKN_SERVICE_"FAILED"__; exit 1; }\n'
@@ -586,8 +630,8 @@ const main = async () => {
       'ctr=$(printf "%s\\n" "$build_containers" | /bin/busybox tail -n 1); ' +
       '( sleep 30; for candidate in $build_containers; do ' +
       '[ "$candidate" = "$ctr" ] || buildah rm "$candidate" >/dev/null 2>&1 || true; done ) & ' +
-      '[ -n "$ctr" ] || ctr=$(buildah from userimg)'
-    : 'ctr=$(buildah from userimg)'
+      '[ -n "$ctr" ] || ctr=$(buildah from "$target_image")'
+    : 'ctr=$(buildah from "$target_image")'
   const containerLaunch = serviceMode && publishSpec
     ? '  ' + createContainer + ' || { echo __FKN_SERVICE_"FAILED"__; exit 1; }\n' +
       '  printf "== image command =="; printf " <%s>" "$@"; printf "\\n"\n' +
@@ -614,13 +658,21 @@ const main = async () => {
       '  wait "$readiness_pid" 2>/dev/null || true\n' +
       '  echo __FKN_SERVICE_"FAILED"__\n' +
       '  exit "$status"\n'
-    : '  ' + createContainer + ' && exec buildah run --network host --terminal --env TERM=dumb "$ctr"' + containerCommand + '\n'
+    : '  ' + createContainer + ' || { echo __FKN_RUN_"FAILED"__; exit 1; }\n' +
+      '  if buildah run --network host --terminal --env TERM=dumb "$ctr"' + containerCommand + '; then\n' +
+      '    exit 0\n' +
+      '  else\n' +
+      '    status=$?\n' +
+      '    echo __FKN_RUN_"FAILED"__\n' +
+      '    exit "$status"\n' +
+      '  fi\n'
   const script =
     "if sh -eu <<'FKN_BUILD'\n" + buildCommands +
     'FKN_BUILD\n' +
     'then\n' +
     '  echo __FKN_BUILD_"OK"__\n' +
     '  echo == running container ==\n' +
+    targetImageSetup +
     defaultCommandSetup +
     containerLaunch +
     'else\n' +
@@ -655,7 +707,7 @@ const main = async () => {
   let serviceProbeStarted = false
   const buildTimer = setInterval(() => {
     const output = terminalTail(80).trimEnd()
-    if (runtimeMarkers.buildFailed || runtimeMarkers.serviceFailed) {
+    if (runtimeMarkers.buildFailed || runtimeMarkers.runFailed || runtimeMarkers.serviceFailed) {
       clearInterval(buildTimer)
       closeVirtualPort()
       if (serviceProbe) serviceProbe.disabled = true
@@ -676,6 +728,8 @@ const main = async () => {
       setRuntimeStage(runtimeMarkers.buildFailed ? 2 : 3,
         runtimeMarkers.buildFailed
           ? 'Dockerfile build failed'
+          : runtimeMarkers.runFailed
+            ? 'Container failed to start'
           : serviceProbeStarted ? 'Image service stopped' : 'Image service failed to start',
         'error')
       return
@@ -691,12 +745,14 @@ const main = async () => {
       if (serviceProbe) serviceProbe.disabled = false
       if (!serviceProbeStarted) {
         serviceProbeStarted = true
-        void probeService(true)
+        void probeService(60_000, true)
       }
       return
     }
-    setRuntimeStage(3, /\/ #\s*$/.test(output) ? 'Container shell ready' : 'Starting container shell')
-    if (/\/ #\s*$/.test(output)) {
+    const containerShellReady = /\/ #\s*$/.test(output)
+    setRuntimeStage(3, containerShellReady ? 'Container shell ready' : 'Starting container shell')
+    if (containerShellReady) {
+      markRuntimeTiming('container-shell-ready')
       clearInterval(buildTimer)
       if (serviceProbe) serviceProbe.disabled = false
     }

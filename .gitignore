@@ -2,6 +2,7 @@
 
 # Built wasm artifacts (c2w-webvpn-proxy.wasm, out.wasm, playground.wasm, …).
 *.wasm
+*.wasm.gz
 
 # JS/TS toolchains (Vite, Rollup, TypeScript, esbuild).
 node_modules/
@@ -15,6 +16,7 @@ _worker.bundle
 
 # Upstream c2w sources cloned into public/ during build-image.sh.
 public/_c2w_src/
+public/presets/preset-assets.json
 
 # --- app-specific ----------------------------------------------------------
 

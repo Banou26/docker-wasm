@@ -7,6 +7,8 @@ const manifestPath = path.join(root, 'wasm-assets.json')
 const assets = {
     '/playground/playground.wasm': 'playground/playground.wasm',
     '/c2w-webvpn-proxy.wasm': 'c2w-webvpn-proxy.wasm',
+    '/presets/shell.wasm': 'presets/shell.wasm',
+    '/presets/http.wasm': 'presets/http.wasm',
 }
 const args = process.argv.slice(2)
 const sourceRootIndex = args.indexOf('--source-root')
@@ -31,9 +33,9 @@ const versions = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 
 for (const url of args) {
     const relativePath = assets[url]
-    if (!relativePath) throw new Error('Unknown WASM asset: ' + url)
+    if (!relativePath) throw new Error('Unknown artifact: ' + url)
     const file = path.join(sourceRoot, relativePath)
-    if (!fs.existsSync(file)) throw new Error('Missing WASM asset: ' + relativePath)
+    if (!fs.existsSync(file)) throw new Error('Missing artifact: ' + relativePath)
     versions[url] = createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 

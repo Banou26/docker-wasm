@@ -61,7 +61,8 @@ function serveFile(req, res, full, immutable) {
                 'ETag': etag,
                 ...coiHeaders,
             }
-            if (path.extname(full) === '.wasm') headers.Vary = 'Accept-Encoding'
+            const compressible = path.extname(full) === '.wasm'
+            if (compressible) headers.Vary = 'Accept-Encoding'
             if (encoding) headers['Content-Encoding'] = encoding
             const matches = (req.headers['if-none-match'] || '').split(',').map((value) => value.trim())
             if (matches.includes(etag)) {
@@ -195,8 +196,7 @@ http.createServer((req, res) => {
     const full = path.normalize(path.join(root, rel))
     if (!full.startsWith(root)) { res.writeHead(403); return res.end() }
     const wasmUrl = '/' + rel
-    const immutable = (path.extname(full) === '.wasm' &&
-        wasmVersions[wasmUrl] === u.searchParams.get('v')) ||
+    const immutable = wasmVersions[wasmUrl] === u.searchParams.get('v') ||
         /^assets\/.+-[A-Za-z0-9_-]{8,}\.[^/]+$/.test(rel)
     return serveFile(req, res, full, immutable)
 }).listen(port, '127.0.0.1', () => {

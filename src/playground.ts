@@ -1,4 +1,11 @@
 import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
+import {
+  matchPreset,
+  PRESET_DOCKERFILES,
+  PRESET_RUNTIME_TIMEOUT_MS,
+  PRESET_WASM_PATHS,
+  type PresetName,
+} from './presets'
 
 const dropZone = document.getElementById('drop-zone')!
 const pasteBox = document.getElementById('paste-box') as HTMLTextAreaElement
@@ -13,33 +20,32 @@ const finalStageCopy = document.getElementById('final-stage-copy')!
 const modeCopy = document.getElementById('mode-copy')!
 const modeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-demo-mode]'))
 
-type DemoMode = 'shell' | 'http'
-
-const SHELL_DOCKERFILE = `FROM alpine:3.19
-
-RUN apk add --no-cache curl
-
-CMD ["/bin/sh"]`
-
-const HTTP_BODY = JSON.stringify({
-  ok: true,
-  message: 'Hello from inside the Docker image.',
-  service: 'guest:8080',
-  transport: 'FKN virtual TCP',
-})
-const HTTP_RESPONSE_COMMAND = `printf 'HTTP/1.0 200 OK\\r\\nContent-Type: application/json; charset=utf-8\\r\\nContent-Length: ${new TextEncoder().encode(HTTP_BODY).byteLength}\\r\\nConnection: close\\r\\n\\r\\n${HTTP_BODY}'`
-const shellQuote = (value: string): string => "'" + value.replace(/'/g, "'\"'\"'") + "'"
-const HTTP_SERVICE_COMMAND =
-  "printf '%s\\n' '#!/bin/sh' " + shellQuote(HTTP_RESPONSE_COMMAND) + ' > /tmp/fkn-http-serve && ' +
-  'chmod +x /tmp/fkn-http-serve && ' +
-  'while true; do /bin/busybox nc -l -p 8080 -e /tmp/fkn-http-serve; done'
-
-const HTTP_DOCKERFILE = `FROM alpine:3.19
-
-EXPOSE 8080
-CMD ${JSON.stringify(['/bin/sh', '-c', HTTP_SERVICE_COMMAND])}`
+type DemoMode = PresetName
 
 let demoMode: DemoMode = 'shell'
+const presetWarmups: Partial<Record<PresetName, Promise<void>>> = {}
+
+const warmPresetRuntime = (mode: DemoMode = demoMode): void => {
+  const source = mode === demoMode ? pasteBox.value : PRESET_DOCKERFILES[mode]
+  const preset = matchPreset(source, mode === 'http' ? 8080 : null)
+  if (!preset || presetWarmups[preset]) return
+
+  presetWarmups[preset] = fetch(withWasmAssetVersion(PRESET_WASM_PATHS[preset]), {
+    cache: 'force-cache',
+    credentials: 'same-origin',
+    signal: AbortSignal.timeout(PRESET_RUNTIME_TIMEOUT_MS),
+  }).then(async (response) => {
+    if (!response.ok) throw new Error('HTTP ' + response.status)
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.toLowerCase().includes('application/wasm')) {
+      throw new Error('expected application/wasm, received ' + (contentType || 'no content type'))
+    }
+    await response.arrayBuffer()
+  }).catch((error) => {
+    delete presetWarmups[preset]
+    console.info('[presets] ' + preset + ' runtime warmup did not complete: ' + error)
+  })
+}
 
 const countBaseImages = (source: string): number => {
   const refs = new Set<string>()
@@ -63,14 +69,14 @@ const updateEditor = (): void => {
 const selectDemoMode = (mode: DemoMode): void => {
   demoMode = mode
   const service = mode === 'http'
-  pasteBox.value = service ? HTTP_DOCKERFILE : SHELL_DOCKERFILE
+  pasteBox.value = PRESET_DOCKERFILES[mode]
   flightTitle.textContent = service ? 'From source to service.' : 'From source to shell.'
   finalStageTitle.textContent = service ? 'Connect' : 'Open'
   finalStageCopy.textContent = service ? 'In-process request into guest :8080' : 'Your container shell'
   modeCopy.textContent = service
-    ? 'Run the image command behind an in-process FKN virtual port.'
-    : 'Build the image, then work inside its shell.'
-  runLabel.textContent = service ? 'Build and connect service' : 'Boot this Dockerfile'
+    ? 'Launch the image command behind an in-process FKN virtual port.'
+    : 'Open the image as an interactive shell.'
+  runLabel.textContent = service ? 'Launch HTTP service' : 'Launch container shell'
   for (const button of modeButtons) {
     const active = button.dataset.demoMode === mode
     button.classList.toggle('is-active', active)
@@ -126,19 +132,26 @@ dropZone.addEventListener('drop', (event: DragEvent) => {
 })
 
 for (const button of modeButtons) {
-  button.addEventListener('click', () => selectDemoMode(button.dataset.demoMode as DemoMode))
+  const mode = button.dataset.demoMode as DemoMode
+  button.addEventListener('pointerenter', () => warmPresetRuntime(mode))
+  button.addEventListener('focus', () => warmPresetRuntime(mode))
+  button.addEventListener('click', () => selectDemoMode(mode))
 }
 
 const run = (): void => {
-  const dockerfile = pasteBox.value.trim()
-  if (!dockerfile) return
+  const dockerfile = pasteBox.value
+  if (!dockerfile.trim()) return
+  const preset = matchPreset(dockerfile, demoMode === 'http' ? 8080 : null)
+  warmPresetRuntime()
   runBtn.disabled = true
   runBtn.setAttribute('aria-busy', 'true')
   status.textContent = 'Opening runtime'
   status.className = 'status ok'
   const params = new URLSearchParams({
     [QUERY_PARAMS.net]: 'webvpn',
-    [QUERY_PARAMS.wasmUrl]: withWasmAssetVersion('/playground/playground.wasm'),
+    [QUERY_PARAMS.wasmUrl]: withWasmAssetVersion(
+      preset ? PRESET_WASM_PATHS[preset] : '/playground/playground.wasm',
+    ),
   })
   if (demoMode === 'http') {
     params.set(QUERY_PARAMS.publish, 'tcp:8080')
@@ -149,8 +162,11 @@ const run = (): void => {
 }
 
 runBtn.addEventListener('click', run)
+runBtn.addEventListener('pointerenter', () => warmPresetRuntime())
+runBtn.addEventListener('focus', () => warmPresetRuntime())
+runBtn.addEventListener('pointerdown', () => warmPresetRuntime())
 pasteBox.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') run()
 })
 
-updateEditor()
+selectDemoMode('shell')

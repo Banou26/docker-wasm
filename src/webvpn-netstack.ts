@@ -78,7 +78,7 @@ export type VirtualTCPPort = {
   close: () => Promise<void>
 }
 
-// Image cache - populated by main.ts when a Dockerfile hash is present in the URL.
+// Artifact cache populated by main.ts for image archives and generated scripts.
 // Worker requests image_size/chunk; we serve from cached bytes.
 export type ImageCache = Map<string, ImageCacheEntry>
 
@@ -433,8 +433,7 @@ export const createWebvpnNetstack = (host: {
           return true
         }
         case 'webvpn_image_size': {
-          // Look up a pulled image's byte length. Cache populated by main.ts at
-          // page load (one entry per FROM ref); the promise may still be pending.
+          // Look up an artifact's byte length. The promise may still be pending.
           const ref = new TextDecoder().decode(req.ref)
           const entry = host.imageCache.get(ref)
           if (!entry) {

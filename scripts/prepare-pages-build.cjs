@@ -2,11 +2,14 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 
 const root = path.join(__dirname, '..', 'build')
-const generatedWasm = [
+const externalArtifacts = [
     'out.wasm',
     'c2w-net-proxy.wasm',
     'c2w-webvpn-proxy.wasm',
     'playground/playground.wasm',
+    'presets/shell.wasm',
+    'presets/http.wasm',
+    'presets/preset-assets.json',
 ]
 const maximumFileSize = 25 * 1024 * 1024
 
@@ -22,7 +25,7 @@ async function files(dir) {
 }
 
 async function prepare() {
-    for (const relative of generatedWasm) {
+    for (const relative of externalArtifacts) {
         await fsp.rm(path.join(root, relative), { force: true })
         await fsp.rm(path.join(root, relative + '.gz'), { force: true })
     }

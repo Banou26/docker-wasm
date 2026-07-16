@@ -8,6 +8,8 @@
     "dev-wasm-cmd": "nodemon -e go --watch src/proxy --exec \"npm run make-docker\"",
     "dev-wasm": "concurrently \"nodemon -e go --watch src/proxy --exec \\\"npm run make-docker\\\"\"",
     "make-docker": "docker compose run --rm docker-wasm make",
+    "build-presets": "./scripts/build-preset-images.sh",
+    "verify-presets": "./scripts/verify-preset-images.sh",
     "dev-web": "vite --port 1234",
     "vite-build": "vite build && npm run compress-wasm",
     "build:pages": "WASM_ASSET_BASE=/wasm-assets vite build && node scripts/prepare-pages-build.cjs",

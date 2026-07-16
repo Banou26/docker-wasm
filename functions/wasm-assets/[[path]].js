@@ -1,9 +1,14 @@
-const objectPattern = /^(?:playground\/playground|c2w-webvpn-proxy)\.[0-9a-f]{64}\.wasm\.js$/
+const objectRules = [
+  {
+    pattern: /^(?:playground\/playground|c2w-webvpn-proxy|presets\/(?:shell|http))\.[0-9a-f]{64}\.wasm\.js$/,
+    contentType: 'application/wasm',
+  },
+]
 
-const responseHeaders = (object) => {
+const responseHeaders = (object, contentType) => {
   const headers = new Headers()
   object.writeHttpMetadata(headers)
-  headers.set('Content-Type', 'application/wasm')
+  headers.set('Content-Type', contentType)
   headers.set('Content-Encoding', 'gzip')
   headers.set('Cache-Control', 'public, max-age=31536000, immutable')
   headers.set('ETag', object.httpEtag)
@@ -21,7 +26,10 @@ export async function onRequest(context) {
   }
 
   const key = Array.isArray(params.path) ? params.path.join('/') : params.path
-  if (typeof key !== 'string' || !objectPattern.test(key)) {
+  const rule = typeof key === 'string'
+    ? objectRules.find(({ pattern }) => pattern.test(key))
+    : undefined
+  if (!rule) {
     return new Response('Not found', { status: 404 })
   }
 
@@ -29,7 +37,7 @@ export async function onRequest(context) {
     const object = await env.WASM_ASSETS.head(key)
     if (object === null) return new Response('Not found', { status: 404 })
     return new Response(null, {
-      headers: responseHeaders(object),
+      headers: responseHeaders(object, rule.contentType),
       encodeBody: 'manual',
     })
   }
@@ -40,6 +48,7 @@ export async function onRequest(context) {
   const cached = await caches.default.match(cacheKey)
   if (cached) {
     const cachedHeaders = new Headers(cached.headers)
+    cachedHeaders.set('Content-Type', rule.contentType)
     cachedHeaders.set('Content-Encoding', 'gzip')
     return new Response(cached.body, {
       status: cached.status,
@@ -53,7 +62,7 @@ export async function onRequest(context) {
   if (object === null) return new Response('Not found', { status: 404 })
 
   const response = new Response(object.body, {
-    headers: responseHeaders(object),
+    headers: responseHeaders(object, rule.contentType),
     encodeBody: 'manual',
   })
 
@@ -66,7 +75,7 @@ export async function onRequest(context) {
     encodeBody: 'manual',
   })
   context.waitUntil(caches.default.put(cacheKey, cacheResponse).catch((error) => {
-    console.warn('WASM cache write failed', error)
+    console.warn('Artifact cache write failed', error)
   }))
   return response
 }

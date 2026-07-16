@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "container2wasm": {
+    "version": "v0.8.4",
+    "commit": "6ed3d98882a2b22eafc1334f574c364a5b2b8c47"
+  },
+  "artifacts": {
+    "shell": {
+      "dockerfile": "shell.Dockerfile",
+      "dockerfileSha256": "402d6f8dcf5383de42303035ee8988c3427bf3376565cc34f3012ed7f5e6b42d",
+      "wasmSha256": "16c328a2985be607f346d5630fffd840c3cc0edf2d096ca7ea10082635c657c6",
+      "platform": "linux/amd64"
+    },
+    "http": {
+      "dockerfile": "http.Dockerfile",
+      "dockerfileSha256": "2093296be1c6a63a5ae031d529991fd023ad2f5affb41fb24cf5a5e390b7b05e",
+      "wasmSha256": "7463fafeb36477c596d64116bd0447b267a8f2ed4cdaf5a66f6bb2818f51fbf8",
+      "platform": "linux/amd64"
+    }
+  }
+}
