@@ -223,11 +223,23 @@ What the numbers depend on, roughly in order:
    `Cache-Control: public, max-age=31536000, immutable` is safe and correct.
 4. **Your service.** Once the guest is up, per-request latency is dominated by
    what the container does. A service that forks a shell per connection costs
-   roughly 180 ms per request under emulation; a persistent process that accepts
+   roughly 170 ms per request under emulation; a persistent process that accepts
    in a loop is far cheaper. The runtime keeps connections alive and pools them
    when the server allows it.
 5. **`preloadContainer`.** Moving the download before the click removes it from
    the perceived startup time.
+
+Measured on the demo image, riscv64, localhost:
+
+| | |
+| --- | --- |
+| Download plus streaming compile | 3.0 s |
+| First HTTP response after the call | 4.3 s |
+| Steady-state request latency | 166 to 186 ms, median 170 ms |
+| Throughput of a download run inside the guest | around 197 KB/s |
+
+The guest itself copies memory at about 1.2 MB/s under emulation, which is the
+ceiling everything else sits under.
 
 ## Requirements
 
