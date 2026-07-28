@@ -1,0 +1,18 @@
+[DEBUG] [vite] connecting... @ http://localhost:1234/@vite/client:494
+[DEBUG] [vite] connected. @ http://localhost:1234/@vite/client:617
+[DEBUG] [vite] connecting... @ http://localhost:1234/@vite/client:494
+[DEBUG] [vite] connected. @ http://localhost:1234/@vite/client:617
+[INFO] [timing] runtime-script-ready: 46 ms from navigation @ http://localhost:1234/src/main.ts:11
+[INFO] [timing] terminal-ready: 95 ms from navigation @ http://localhost:1234/src/main.ts:11
+[INFO] [timing] workers-started: 96 ms from navigation @ http://localhost:1234/src/main.ts:11
+[LOG] [registry] alpine:3.21: resolving alpine:3.21 -> registry-1.docker.io/library/alpine:3.21 @ http://localhost:1234/src/main.ts:348
+[DEBUG] [netstack] 2026/07/28 21:34:15 c2w-webvpn-proxy: serving guest network over @webvpn @ http://localhost:1234/src/lib/workers/netstack.worker.ts?worker_file&type=module:153
+[LOG] [registry] alpine:3.21: manifest list -> picked linux/amd64 (sha256:f27cad9117495d32d067133afff942cb2dc745dfe9163e949f6bfe8a6a245339) @ http://localhost:1234/src/main.ts:348
+[LOG] [registry] alpine:3.21: fetch config sha256:2607caa9805847fac4de202017bb1b830deb09f4c07dc9964a0157abbc604577 @ http://localhost:1234/src/main.ts:348
+[LOG] [registry] alpine:3.21: fetch layer 1/1 sha256:897d797d2723cf0e318402f4d6f37d51b011517e5cf09246b22155f0fa90dc81 (3561 KiB) @ http://localhost:1234/src/main.ts:348
+[INFO] [timing] wasm-ready: 3507 ms from navigation @ http://localhost:1234/src/main.ts:11
+[INFO] [timing] guest-started: 3507 ms from navigation @ http://localhost:1234/src/main.ts:11
+[LOG] [registry] alpine:3.21: docker-archive ready: 3652096 bytes @ http://localhost:1234/src/main.ts:348
+[INFO] [timing] base-images-ready: 5920 ms from navigation @ http://localhost:1234/src/main.ts:11
+[INFO] [timing] guest-shell-ready: 19734 ms from navigation @ http://localhost:1234/src/main.ts:11
+[INFO] [timing] build-script-sent: 19734 ms from navigation @ http://localhost:1234/src/main.ts:11

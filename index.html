@@ -73,6 +73,8 @@
               <p class="demo-lede">
                 The image below is <code>alpine:3.21</code> with a busybox HTTP service on port 8080,
                 converted to WebAssembly ahead of time. Everything after the button runs in this tab.
+                It answers with what it saw, so the JSON below describes your request rather than
+                repeating a canned string.
               </p>
             </div>
             <button id="boot" type="button" class="primary-action">
@@ -134,6 +136,10 @@
               <pre class="logs" id="logs" role="log" aria-live="off"></pre>
             </section>
           </div>
+          <p class="demo-footnote">
+            This service forks a busybox shell per connection, which is most of the per-request
+            time under emulation. A process that accepts in a loop is considerably cheaper.
+          </p>
         </section>
 
         <section class="howto" aria-labelledby="howto-title">

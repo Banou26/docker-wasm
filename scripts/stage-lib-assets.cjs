@@ -13,6 +13,14 @@ const name = 'c2w-webvpn-proxy.wasm'
 const candidates = [path.join(root, 'dist', name), path.join(root, 'public', name)]
 const destination = path.join(root, 'src', 'lib', name)
 
+if (process.argv.includes('--clean')) {
+    // Removed again after the library build. Left in place, it would also be
+    // emitted into the demo site's bundle, which passes its own copy explicitly.
+    fs.rmSync(destination, { force: true })
+    console.log('removed src/lib/' + name)
+    process.exit(0)
+}
+
 const source = candidates.find((candidate) => fs.existsSync(candidate))
 if (!source) {
     console.error(
