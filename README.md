@@ -258,6 +258,11 @@ ceiling everything else sits under.
 | `dockerfile/`, `src/playground.ts` | The in-browser Dockerfile builder. |
 | `playground/`, `src/main.ts` | The runtime page the builder launches. |
 
+The in-browser builder is a demo of what the network path makes possible, not the
+recommended way to ship an image. It boots an amd64 builder guest, so it runs on
+Bochs and is minutes slower than the prebuilt riscv64 artifacts the plugin
+produces. Use the plugin for anything real.
+
 ### Building this repository
 
 ```sh
