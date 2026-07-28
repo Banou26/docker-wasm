@@ -46,8 +46,8 @@ verify_artifact() {
         exit 1
     }
     platform="$(jq -r --arg name "$name" '.artifacts[$name].platform' "$metadata")"
-    [[ "$platform" == linux/amd64 ]] || {
-        echo "$name targets $platform instead of linux/amd64" >&2
+    [[ "$platform" == linux/riscv64 ]] || {
+        echo "$name targets $platform instead of linux/riscv64" >&2
         exit 1
     }
     magic="$(od -An -tx1 -N4 "$artifact" | tr -d '[:space:]')"

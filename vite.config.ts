@@ -79,7 +79,7 @@ const validatePresetAssets = (
   for (const [name, source] of Object.entries(presetSources) as Array<['shell' | 'http', string]>) {
     const record = manifest.artifacts[name]
     const sourceDigest = createHash('sha256').update(readFileSync(join(process.cwd(), source))).digest('hex')
-    if (!record || record.dockerfile !== name + '.Dockerfile' || record.platform !== 'linux/amd64' ||
+    if (!record || record.dockerfile !== name + '.Dockerfile' || record.platform !== 'linux/riscv64' ||
         record.dockerfileSha256 !== sourceDigest || !digestPattern.test(record.wasmSha256) ||
         record.wasmSha256 !== versions['/presets/' + name + '.wasm']) {
       throw new Error(label + ' ' + name + ' preset does not match its canonical source and WASM digest')
@@ -160,6 +160,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
+        dockerfile: 'dockerfile/index.html',
         playground: 'playground/index.html',
       },
       output: {
@@ -170,16 +171,19 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      'node:buffer': 'buffer',
-      'node:events': 'events',
-      'node:util': 'util',
-      'node:stream': 'stream-browserify',
-      'node:process': 'process/browser',
-      process: 'process/browser',
-      stream: 'stream-browserify',
-      util: 'util/',
-    },
+    // Exact matches only. A bare string alias also rewrites subpaths, so a
+    // `process` entry would turn `process/browser.js` into
+    // `process/browser/browser.js`.
+    alias: [
+      { find: /^node:buffer$/, replacement: 'buffer' },
+      { find: /^node:events$/, replacement: 'events' },
+      { find: /^node:util$/, replacement: 'util/' },
+      { find: /^node:stream$/, replacement: 'stream-browserify' },
+      { find: /^node:process$/, replacement: 'process/browser.js' },
+      { find: /^process$/, replacement: 'process/browser.js' },
+      { find: /^stream$/, replacement: 'stream-browserify' },
+      { find: /^util$/, replacement: 'util/' },
+    ],
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),

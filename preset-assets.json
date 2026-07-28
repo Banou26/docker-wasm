@@ -7,15 +7,15 @@
   "artifacts": {
     "shell": {
       "dockerfile": "shell.Dockerfile",
-      "dockerfileSha256": "402d6f8dcf5383de42303035ee8988c3427bf3376565cc34f3012ed7f5e6b42d",
-      "wasmSha256": "16c328a2985be607f346d5630fffd840c3cc0edf2d096ca7ea10082635c657c6",
-      "platform": "linux/amd64"
+      "dockerfileSha256": "87597bdb9bb1e8b775dfa49f151f867db6c95f16417a7c3599d0bee1543ec824",
+      "wasmSha256": "4e0ce376cdba8e2ad0ec233387ed8de88cd304639ae6dd4a2c758afe1266492f",
+      "platform": "linux/riscv64"
     },
     "http": {
       "dockerfile": "http.Dockerfile",
-      "dockerfileSha256": "2093296be1c6a63a5ae031d529991fd023ad2f5affb41fb24cf5a5e390b7b05e",
-      "wasmSha256": "7463fafeb36477c596d64116bd0447b267a8f2ed4cdaf5a66f6bb2818f51fbf8",
-      "platform": "linux/amd64"
+      "dockerfileSha256": "4744ebafa2c339db18f257fffc1f94bd25f89d1e19a5d3c03e4579cff66e5cad",
+      "wasmSha256": "69d799b12f41f9d843c0539b66e91884959f3f10f5d479a8eb87e8a83e87f72c",
+      "platform": "linux/riscv64"
     }
   }
 }

@@ -1,5 +1,3 @@
-FROM alpine:3.19
-
-RUN apk add --no-cache curl
+FROM alpine:3.21
 
 CMD ["/bin/sh"]

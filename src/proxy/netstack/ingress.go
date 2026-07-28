@@ -14,7 +14,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 )
 
-const ingressPollInterval = 20 * time.Millisecond
+// Every inbound connection waits up to one interval before the guest sees it,
+// so this is a floor on request latency from the page. The poll is a cheap
+// SharedArrayBuffer round trip and it sleeps between attempts, which yields to
+// the rest of the Go scheduler, so a short interval costs little.
+const ingressPollInterval = 5 * time.Millisecond
 
 type IngressConn struct {
 	Network   string

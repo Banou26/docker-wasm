@@ -32,9 +32,9 @@ c2w_commit="$(git -C "$assets" rev-parse HEAD)"
     exit 1
 }
 (cd "$assets" && go build -trimpath -o "$temporary/c2w" ./cmd/c2w)
-docker build --pull --platform linux/amd64 --file "$presets/shell.Dockerfile" --tag "$shell_image" \
+docker build --pull --platform linux/riscv64 --file "$presets/shell.Dockerfile" --tag "$shell_image" \
     --label "$source_label=$shell_source" "$presets"
-docker build --pull --platform linux/amd64 --file "$presets/http.Dockerfile" --tag "$http_image" \
+docker build --pull --platform linux/riscv64 --file "$presets/http.Dockerfile" --tag "$http_image" \
     --label "$source_label=$http_source" "$presets"
 
 verify_image() {
@@ -44,8 +44,8 @@ verify_image() {
     local actual_source
 
     platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")"
-    [[ "$platform" == linux/amd64 ]] || {
-        echo "$image targets $platform instead of linux/amd64" >&2
+    [[ "$platform" == linux/riscv64 ]] || {
+        echo "$image targets $platform instead of linux/riscv64" >&2
         exit 1
     }
     actual_source="$(docker image inspect --format "{{index .Config.Labels \"$source_label\"}}" "$image")"
@@ -58,8 +58,8 @@ verify_image() {
 verify_image "$shell_image" "$shell_source"
 verify_image "$http_image" "$http_source"
 
-"$temporary/c2w" --assets "$assets" --target-arch amd64 "$shell_image" "$temporary/shell.wasm"
-"$temporary/c2w" --assets "$assets" --target-arch amd64 "$http_image" "$temporary/http.wasm"
+"$temporary/c2w" --assets "$assets" --target-arch riscv64 "$shell_image" "$temporary/shell.wasm"
+"$temporary/c2w" --assets "$assets" --target-arch riscv64 "$http_image" "$temporary/http.wasm"
 
 shell_wasm="$(sha256sum "$temporary/shell.wasm")"
 shell_wasm="${shell_wasm%% *}"
@@ -81,13 +81,13 @@ jq -n \
                 dockerfile: "shell.Dockerfile",
                 dockerfileSha256: $shellSource,
                 wasmSha256: $shellWasm,
-                platform: "linux/amd64"
+                platform: "linux/riscv64"
             },
             http: {
                 dockerfile: "http.Dockerfile",
                 dockerfileSha256: $httpSource,
                 wasmSha256: $httpWasm,
-                platform: "linux/amd64"
+                platform: "linux/riscv64"
             }
         }
     }' > "$temporary/preset-assets.json"
