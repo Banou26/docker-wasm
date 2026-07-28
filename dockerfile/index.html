@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="description" content="Drop a Dockerfile and build it inside a browser tab with Linux, WebAssembly and Buildah.">
+    <title>Build a Dockerfile in the browser / Container Lab</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/src/style.css">
+  </head>
+  <body>
+    <div class="site-shell">
+      <nav class="topbar" aria-label="Primary navigation">
+        <a class="brand" href="/" aria-label="Container Lab home">
+          <span class="brand-mark">FKN</span>
+          <span class="brand-product">Container Lab</span>
+        </a>
+        <div class="topbar-meta">
+          <span class="pulse" aria-hidden="true"></span>
+          In-browser build
+          <a class="topbar-link" href="/">Home</a>
+        </div>
+      </nav>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div>
+            <p class="eyebrow">No build step</p>
+            <h1 id="hero-title">Drop a Dockerfile.<br><em>Build it in the tab.</em></h1>
+          </div>
+          <div class="hero-copy">
+            <p>
+              A builder guest with Buildah inside it pulls your base image through FKN and assembles
+              the result, all in this page. Slower than the prebuilt artifact the Vite plugin
+              produces, but nothing is installed and nothing leaves the tab.
+            </p>
+            <div class="hero-facts" aria-label="Runtime facts">
+              <span><strong>0</strong> build servers</span>
+              <span><strong>1</strong> browser tab</span>
+              <span><strong>TCP + UDP</strong> via FKN</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="workbench" aria-label="Dockerfile workbench">
+          <div id="drop-zone" class="editor-pane">
+            <div class="pane-bar">
+              <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+              <span class="file-name">Dockerfile</span>
+              <span class="language-badge">docker</span>
+            </div>
+            <div class="editor-body">
+              <div class="line-numbers" aria-hidden="true">01<br>02<br>03<br>04<br>05</div>
+              <textarea id="paste-box" aria-label="Dockerfile contents" spellcheck="false">FROM alpine:3.19
+
+RUN apk add --no-cache curl
+
+CMD ["/bin/sh"]</textarea>
+              <div class="drop-message" aria-hidden="true">
+                <strong>Drop Dockerfile</strong>
+                <span>Release to load</span>
+              </div>
+            </div>
+            <div class="editor-footer">
+              <span id="editor-meta">5 lines / 1 base image</span>
+              <div class="file-actions">
+                <span id="status" class="status" aria-live="polite">Ready</span>
+                <label class="file-trigger" for="file-input">Load file</label>
+                <input id="file-input" type="file" accept="Dockerfile,.dockerfile,text/plain">
+              </div>
+            </div>
+          </div>
+
+          <aside class="launch-pane">
+            <div>
+              <p class="step-label">Flight plan / 04 stages</p>
+              <h2 id="flight-title">From source to shell.</h2>
+            </div>
+            <ol class="flight-plan">
+              <li><span>01</span><div><strong>Boot</strong><small>Linux x86 guest in WASM</small></div></li>
+              <li><span>02</span><div><strong>Load</strong><small>Dedicated runtime or OCI layers</small></div></li>
+              <li><span>03</span><div><strong>Prepare</strong><small>Direct image or Buildah</small></div></li>
+              <li><span>04</span><div><strong id="final-stage-title">Open</strong><small id="final-stage-copy">Your container shell</small></div></li>
+            </ol>
+            <div class="mode-picker">
+              <span>Choose a launch</span>
+              <div role="group" aria-label="Container Lab example">
+                <button class="is-active" type="button" data-demo-mode="shell" aria-pressed="true">Shell</button>
+                <button type="button" data-demo-mode="http" aria-pressed="false">HTTP service</button>
+              </div>
+              <small id="mode-copy">Open the image as an interactive shell.</small>
+            </div>
+            <button id="run-btn" type="button">
+              <span id="run-label">Launch container shell</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+            </button>
+            <p class="launch-note">The first run downloads a Linux runtime. Exact examples start directly; edited Dockerfiles take longer.</p>
+          </aside>
+        </section>
+
+      </main>
+
+      <footer>
+        <span>For production apps, build ahead of time with <code>@fkn/container/vite</code>.</span>
+        <a href="/">Back to Container Lab</a>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/playground.ts"></script>
+  </body>
+</html>

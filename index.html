@@ -3,10 +3,27 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="description" content="Build a Dockerfile inside a browser tab with Linux, WebAssembly, Buildah, and FKN networking.">
+    <meta name="description" content="Build a Dockerfile into WebAssembly, run it in a browser tab, and make real HTTP requests to the service inside.">
     <title>Container Lab by FKN</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/src/style.css">
+    <!-- Classic inline script: runs before the module so the patch is in place
+         when the FKN transport creates its RPC iframe. COEP=credentialless
+         requires the embedded document to be marked, and setting both the
+         property and the attribute covers both accessor paths. -->
+    <script>
+      (function () {
+        var create = Document.prototype.createElement;
+        Document.prototype.createElement = function (tag, options) {
+          var element = create.call(this, tag, options);
+          if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
+            try { element.credentialless = true; } catch (e) {}
+            try { element.setAttribute('credentialless', ''); } catch (e) {}
+          }
+          return element;
+        };
+      })();
+    </script>
   </head>
   <body>
     <div class="site-shell">
@@ -17,104 +34,194 @@
         </a>
         <div class="topbar-meta">
           <span class="pulse" aria-hidden="true"></span>
-          Browser runtime
-          <span class="topbar-index">LAB / 01</span>
+          <span id="isolation-state">Browser runtime</span>
+          <a class="topbar-link" href="/dockerfile/">Build one</a>
+          <a class="topbar-link" href="https://github.com/Banou26/docker-wasm">Source</a>
         </div>
       </nav>
 
       <main>
         <section class="hero" aria-labelledby="hero-title">
           <div>
-            <h1 id="hero-title">Run native HTTP servers in your browser.<br><em>Fetch them from your web app.</em></h1>
+            <p class="eyebrow">npm i @fkn/container</p>
+            <h1 id="hero-title">Ship a Docker image to the browser.<br><em>Then fetch it.</em></h1>
           </div>
           <div class="hero-copy">
-            <p>Paste a Dockerfile. The tab boots an exact built-in image directly, or pulls your base image through FKN and prepares edited source with Buildah.</p>
+            <p>
+              The build step turns your Dockerfile into a WebAssembly artifact. Your app imports it,
+              starts it in a worker, and makes real HTTP requests to the service running inside.
+              No backend, no CORS, no network round trip.
+            </p>
+            <pre class="hero-code"><code><span class="tok-key">import</span> { createContainer } <span class="tok-key">from</span> <span class="tok-str">'@fkn/container'</span>
+<span class="tok-key">import</span> image <span class="tok-key">from</span> <span class="tok-str">'./api/Dockerfile?container'</span>
+
+<span class="tok-key">const</span> api = <span class="tok-fn">createContainer</span>({ image, ports: [<span class="tok-num">8080</span>] })
+<span class="tok-key">const</span> response = <span class="tok-key">await</span> api.<span class="tok-fn">fetch</span>(<span class="tok-str">'/health'</span>)</code></pre>
             <div class="hero-facts" aria-label="Runtime facts">
-              <span><strong>0</strong> build servers</span>
-              <span><strong>1</strong> browser tab</span>
-              <span><strong>TCP + UDP</strong> via FKN</span>
+              <span><strong>0</strong> servers</span>
+              <span><strong>1</strong> worker</span>
+              <span><strong>TCP + UDP</strong> egress</span>
             </div>
           </div>
         </section>
 
-        <section class="workbench" aria-label="Dockerfile workbench">
-          <div id="drop-zone" class="editor-pane">
-            <div class="pane-bar">
-              <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
-              <span class="file-name">Dockerfile</span>
-              <span class="language-badge">docker</span>
-            </div>
-            <div class="editor-body">
-              <div class="line-numbers" aria-hidden="true">01<br>02<br>03<br>04<br>05</div>
-              <textarea id="paste-box" aria-label="Dockerfile contents" spellcheck="false">FROM alpine:3.19
-
-RUN apk add --no-cache curl
-
-CMD ["/bin/sh"]</textarea>
-              <div class="drop-message" aria-hidden="true">
-                <strong>Drop Dockerfile</strong>
-                <span>Release to load</span>
-              </div>
-            </div>
-            <div class="editor-footer">
-              <span id="editor-meta">5 lines / 1 base image</span>
-              <div class="file-actions">
-                <span id="status" class="status" aria-live="polite">Ready</span>
-                <label class="file-trigger" for="file-input">Load file</label>
-                <input id="file-input" type="file" accept="Dockerfile,.dockerfile,text/plain">
-              </div>
-            </div>
-          </div>
-
-          <aside class="launch-pane">
+        <section class="demo" id="demo" aria-labelledby="demo-title">
+          <header class="demo-head">
             <div>
-              <p class="step-label">Flight plan / 04 stages</p>
-              <h2 id="flight-title">From source to shell.</h2>
+              <p class="step-label">Live demo</p>
+              <h2 id="demo-title">A container is one click away. Send it a request.</h2>
+              <p class="demo-lede">
+                The image below is <code>alpine:3.21</code> with a busybox HTTP service on port 8080,
+                converted to WebAssembly ahead of time. Everything after the button runs in this tab.
+              </p>
             </div>
-            <ol class="flight-plan">
-              <li><span>01</span><div><strong>Boot</strong><small>Linux x86 guest in WASM</small></div></li>
-              <li><span>02</span><div><strong>Load</strong><small>Dedicated runtime or OCI layers</small></div></li>
-              <li><span>03</span><div><strong>Prepare</strong><small>Direct image or Buildah</small></div></li>
-              <li><span>04</span><div><strong id="final-stage-title">Open</strong><small id="final-stage-copy">Your container shell</small></div></li>
-            </ol>
-            <div class="mode-picker">
-              <span>Choose a launch</span>
-              <div role="group" aria-label="Container Lab example">
-                <button class="is-active" type="button" data-demo-mode="shell" aria-pressed="true">Shell</button>
-                <button type="button" data-demo-mode="http" aria-pressed="false">HTTP service</button>
-              </div>
-              <small id="mode-copy">Open the image as an interactive shell.</small>
-            </div>
-            <button id="run-btn" type="button">
-              <span id="run-label">Launch container shell</span>
+            <button id="boot" type="button" class="primary-action">
+              <span id="boot-label">Start the container</span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
             </button>
-            <p class="launch-note">The first run downloads a Linux runtime. Exact examples start directly; edited Dockerfiles take longer.</p>
-          </aside>
+          </header>
+
+          <ol class="timeline" id="timeline" aria-label="Startup timeline">
+            <li data-step="download"><span class="timeline-dot" aria-hidden="true"></span><strong>Download</strong><small>idle</small></li>
+            <li data-step="compile"><span class="timeline-dot" aria-hidden="true"></span><strong>Compile</strong><small>idle</small></li>
+            <li data-step="boot"><span class="timeline-dot" aria-hidden="true"></span><strong>Boot Linux</strong><small>idle</small></li>
+            <li data-step="serve"><span class="timeline-dot" aria-hidden="true"></span><strong>First response</strong><small>idle</small></li>
+          </ol>
+
+          <div class="console">
+            <section class="console-pane request-pane" aria-labelledby="request-title">
+              <div class="pane-bar">
+                <span class="file-name" id="request-title">Request</span>
+                <span class="language-badge">app.fetch</span>
+              </div>
+              <form class="request-form" id="request-form">
+                <div class="request-line">
+                  <select id="request-method" aria-label="HTTP method">
+                    <option>GET</option>
+                    <option>POST</option>
+                    <option>PUT</option>
+                    <option>DELETE</option>
+                  </select>
+                  <input id="request-path" aria-label="Request path" value="/hello" spellcheck="false" autocomplete="off">
+                  <button id="send" type="submit" disabled>Send</button>
+                </div>
+                <div class="request-hints">
+                  <button type="button" data-path="/hello">/hello</button>
+                  <button type="button" data-path="/users/42?verbose=1">/users/42?verbose=1</button>
+                  <button type="button" data-path="/health">/health</button>
+                  <button type="button" data-repeat="20">x20 burst</button>
+                </div>
+                <p class="request-note" id="request-note">Start the container to enable requests.</p>
+              </form>
+              <div class="call-trace" id="call-trace" role="log" aria-live="polite" aria-label="Request history"></div>
+            </section>
+
+            <section class="console-pane response-pane" aria-labelledby="response-title">
+              <div class="pane-bar">
+                <span class="file-name" id="response-title">Response</span>
+                <span class="status-pill" id="response-status" data-tone="idle">waiting</span>
+              </div>
+              <div class="response-body" id="response-body">
+                <p class="response-empty">The container has not answered yet.</p>
+              </div>
+            </section>
+
+            <section class="console-pane logs-pane" aria-labelledby="logs-title">
+              <div class="pane-bar">
+                <span class="file-name" id="logs-title">Container stdout</span>
+                <span class="language-badge">linux/riscv64</span>
+              </div>
+              <pre class="logs" id="logs" role="log" aria-live="off"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="howto" aria-labelledby="howto-title">
+          <div class="howto-copy">
+            <p class="eyebrow eyebrow-light">Three files</p>
+            <h2 id="howto-title">The whole integration.</h2>
+            <p>
+              The plugin builds the image when the Dockerfile changes and hands your import a URL.
+              It also sets the cross-origin isolation headers the runtime needs, so there is no
+              header archaeology on the first run.
+            </p>
+          </div>
+          <div class="howto-grid">
+            <article class="code-card">
+              <div class="pane-bar"><span class="file-name">vite.config.ts</span><span class="language-badge">build</span></div>
+              <pre><code><span class="tok-key">import</span> { containers } <span class="tok-key">from</span> <span class="tok-str">'@fkn/container/vite'</span>
+
+<span class="tok-key">export default</span> {
+  plugins: [<span class="tok-fn">containers</span>()],
+}</code></pre>
+            </article>
+            <article class="code-card">
+              <div class="pane-bar"><span class="file-name">app.ts</span><span class="language-badge">runtime</span></div>
+              <pre><code><span class="tok-key">import</span> { createContainer } <span class="tok-key">from</span> <span class="tok-str">'@fkn/container'</span>
+<span class="tok-key">import</span> image <span class="tok-key">from</span> <span class="tok-str">'./api/Dockerfile?container'</span>
+
+<span class="tok-key">const</span> api = <span class="tok-fn">createContainer</span>({
+  image,
+  ports: [<span class="tok-num">8080</span>],
+})
+
+<span class="tok-key">const</span> res = <span class="tok-key">await</span> api.<span class="tok-fn">fetch</span>(<span class="tok-str">'/users/42'</span>)
+<span class="tok-fn">console</span>.log(<span class="tok-key">await</span> res.<span class="tok-fn">json</span>())</code></pre>
+            </article>
+            <article class="code-card">
+              <div class="pane-bar"><span class="file-name">api/Dockerfile</span><span class="language-badge">image</span></div>
+              <pre><code><span class="tok-key">FROM</span> alpine:3.21
+
+<span class="tok-key">EXPOSE</span> 8080
+<span class="tok-key">CMD</span> [<span class="tok-str">"/bin/sh"</span>, <span class="tok-str">"/srv/serve.sh"</span>]</code></pre>
+            </article>
+          </div>
         </section>
 
         <section class="underlay" aria-labelledby="underlay-title">
           <div class="underlay-copy">
-            <p class="eyebrow eyebrow-light">What is under the terminal</p>
+            <p class="eyebrow eyebrow-light">What is under the fetch</p>
             <h2 id="underlay-title">A complete network path, not a fetch shim.</h2>
-            <p>The guest emits Ethernet frames into an in-browser gVisor stack. FKN carries each TCP and UDP flow, while the Dockerfile stays in the URL fragment.</p>
+            <p>
+              The guest emits Ethernet frames into an in-browser gVisor stack. Your request enters
+              through a loopback listener and is dialled into the guest as real TCP. Outbound
+              traffic leaves over FKN, so the container also gets working DNS, TCP and UDP.
+            </p>
           </div>
           <div class="signal-chain" aria-label="Runtime architecture">
-            <div><span>01</span><strong>Linux</strong><small>Bochs x86</small></div>
-            <b aria-hidden="true">+</b>
+            <div><span>01</span><strong>fetch</strong><small>your app</small></div>
+            <b aria-hidden="true">&rarr;</b>
             <div><span>02</span><strong>gVisor</strong><small>WASM netstack</small></div>
-            <b aria-hidden="true">+</b>
-            <div><span>03</span><strong>FKN</strong><small>TCP and UDP</small></div>
+            <b aria-hidden="true">&rarr;</b>
+            <div><span>03</span><strong>Linux</strong><small>emulated riscv64</small></div>
+            <b aria-hidden="true">&rarr;</b>
+            <div><span>04</span><strong>your service</strong><small>port 8080</small></div>
           </div>
+        </section>
+
+        <section class="handoff" aria-labelledby="handoff-title">
+          <div>
+            <p class="eyebrow">Build one in the browser</p>
+            <h2 id="handoff-title">Or skip the build step entirely.</h2>
+            <p>
+              The playground boots a builder guest with Buildah inside it, pulls your base image
+              through FKN, and runs the result. Slower than a prebuilt artifact, but nothing is
+              installed and nothing leaves the tab.
+            </p>
+          </div>
+          <a class="primary-action" href="/dockerfile/">
+            <span>Open the playground</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+          </a>
         </section>
       </main>
 
       <footer>
-        <span>Container Lab is a focused FKN capability demo.</span>
+        <span>Container Lab is the reference app for <code>@fkn/container</code>.</span>
         <a href="https://github.com/Banou26/docker-wasm">Source</a>
       </footer>
     </div>
 
-    <script type="module" src="/src/playground.ts"></script>
+    <script type="module" src="/src/homepage.ts"></script>
   </body>
 </html>
