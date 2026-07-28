@@ -169,10 +169,12 @@ class Endpoint {
 export class FrameBridge {
   private guestEndpoint: Endpoint
   private netstackEndpoint: Endpoint
+  private toGuest: Queue
 
   constructor (netstack: () => Netstack | null, onGuestReadable?: () => void) {
     const toGuest = new Queue()
     const toNetstack = new Queue()
+    this.toGuest = toGuest
     this.guestEndpoint = new Endpoint('guest', toNetstack, toGuest, netstack)
     this.netstackEndpoint = new Endpoint('netstack', toGuest, toNetstack, netstack)
     if (onGuestReadable) {
@@ -185,6 +187,10 @@ export class FrameBridge {
       }
     }
   }
+
+  // Bytes waiting for the guest to read. The console host consults this so a
+  // console poll never delays frames that have already arrived.
+  get guestPending (): number { return this.toGuest.length }
 
   get guestBuffer (): SharedArrayBuffer { return this.guestEndpoint.buffer }
   get netstackBuffer (): SharedArrayBuffer { return this.netstackEndpoint.buffer }

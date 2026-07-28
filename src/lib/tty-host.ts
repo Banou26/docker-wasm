@@ -77,6 +77,9 @@ export type TtyHostOptions = {
   columns?: number
   rows?: number
   onOutput?: (bytes: Uint8Array) => void
+  // True when the guest has other work waiting, which makes a console poll
+  // return at once instead of parking. See `handle`.
+  hasPendingWork?: () => boolean
 }
 
 export class TtyHost {
@@ -91,8 +94,10 @@ export class TtyHost {
   private pendingPoll: ReturnType<typeof setTimeout> | null = null
   private waiting = false
   private disposed = false
+  private hasPendingWork: () => boolean
 
   constructor (options: TtyHostOptions = {}) {
+    this.hasPendingWork = options.hasPendingWork ?? (() => false)
     this.buffer = new SharedArrayBuffer(TTY_BUFFER_BYTES)
     this.control = new Int32Array(this.buffer, 0, 1)
     this.payload = new Int32Array(this.buffer, 4)
@@ -168,6 +173,16 @@ export class TtyHost {
       case 'poll': {
         if (this.input.length > 0 || this.disposed) {
           this.payload[0] = this.input.length > 0 ? 1 : 0
+          break
+        }
+        // The guest polls its console and its network socket in one
+        // `poll_oneoff` and waits on the console first. If frames are already
+        // queued, parking here would sleep out the guest's whole clock timeout
+        // before it ever looks at them, which is one poll interval of delay per
+        // packet. Answering "no console input" immediately sends it straight to
+        // the socket.
+        if (this.hasPendingWork()) {
+          this.payload[0] = 0
           break
         }
         const timeoutMs = request.timeout * 1000

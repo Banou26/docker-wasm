@@ -104,8 +104,16 @@ export class Container {
   constructor (private options: ContainerOptions) {
     this.startupGraceMs = options.startupGraceMs ?? 90_000
     this.onStatus = options.onStatus ?? (() => {})
-    this.tty = new TtyHost({ columns: options.columns, rows: options.rows })
-    this.bridge = new FrameBridge(() => this.netstack, () => this.tty.interrupt())
+    // The bridge and the console host are mutually aware: the console must not
+    // park while frames are queued for the guest, and it must be released the
+    // moment new ones arrive.
+    const bridge = new FrameBridge(() => this.netstack, () => this.tty.interrupt())
+    this.bridge = bridge
+    this.tty = new TtyHost({
+      columns: options.columns,
+      rows: options.rows,
+      hasPendingWork: () => bridge.guestPending > 0,
+    })
     this.http = new HttpClient({
       connectTimeoutMs: options.connectTimeoutMs,
       responseTimeoutMs: options.responseTimeoutMs,
