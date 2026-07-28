@@ -1,12 +1,41 @@
+// Precompresses the converted images.
+//
+// These are the largest thing a visitor downloads, so the encoding matters more
+// than anywhere else in the build. Brotli takes the riscv64 demo image from
+// 54 MB to 16 MB, where gzip leaves it at 26 MB. Both are written: the R2
+// publication uploads the brotli object, and the gzip one stays available for
+// anything that cannot negotiate brotli.
+
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { pipeline } = require('node:stream/promises')
-const { createGzip, constants } = require('node:zlib')
+const zlib = require('node:zlib')
 
 const root = path.resolve(process.argv[2] || path.join(__dirname, '..', 'build'))
 
-async function assetFiles(dir) {
+const encodings = [
+    {
+        extension: '.br',
+        label: 'brotli',
+        // Quality 9 rather than 11: on a 54 MB artifact the last two levels
+        // cost minutes of build time for a couple of percent.
+        stream: (size) => zlib.createBrotliCompress({
+            params: {
+                [zlib.constants.BROTLI_PARAM_QUALITY]: 9,
+                [zlib.constants.BROTLI_PARAM_LGWIN]: 24,
+                [zlib.constants.BROTLI_PARAM_SIZE_HINT]: size,
+            },
+        }),
+    },
+    {
+        extension: '.gz',
+        label: 'gzip',
+        stream: () => zlib.createGzip({ level: zlib.constants.Z_BEST_COMPRESSION }),
+    },
+]
+
+async function assetFiles (dir) {
     const entries = await fsp.readdir(dir, { withFileTypes: true })
     const files = []
     for (const entry of entries) {
@@ -17,20 +46,19 @@ async function assetFiles(dir) {
     return files
 }
 
-async function compress(file) {
-    const output = file + '.gz'
-    const sourceStat = await fsp.stat(file)
+async function compress (file, encoding, sourceStat) {
+    const output = file + encoding.extension
     try {
         const outputStat = await fsp.stat(output)
         if (outputStat.mtimeMs >= sourceStat.mtimeMs && outputStat.size > 0) return
-    } catch {}
+    } catch { /* not compressed yet */ }
 
     const temporary = output + '.tmp'
     await fsp.rm(temporary, { force: true })
     try {
         await pipeline(
             fs.createReadStream(file),
-            createGzip({ level: constants.Z_BEST_COMPRESSION }),
+            encoding.stream(sourceStat.size),
             fs.createWriteStream(temporary),
         )
         await fsp.rename(temporary, output)
@@ -41,12 +69,18 @@ async function compress(file) {
 
     const outputStat = await fsp.stat(output)
     const percent = Math.round((1 - outputStat.size / sourceStat.size) * 100)
-    console.log(path.relative(root, file) + ': ' + percent + '% smaller with gzip')
+    console.log(
+        path.relative(root, file) + ': ' + (outputStat.size / 1e6).toFixed(1) + ' MB with ' +
+        encoding.label + ', ' + percent + '% smaller',
+    )
 }
 
 assetFiles(root)
     .then(async (files) => {
-        for (const file of files) await compress(file)
+        for (const file of files) {
+            const sourceStat = await fsp.stat(file)
+            for (const encoding of encodings) await compress(file, encoding, sourceStat)
+        }
     })
     .catch((error) => {
         console.error('Artifact compression failed:', error)

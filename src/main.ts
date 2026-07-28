@@ -1,69 +1,59 @@
-// Runtime entry. The page's <script type="module"> from playground/index.html.
+// Runtime page. Boots whatever the Dockerfile builder handed it and shows the
+// guest console next to the browser side of the conversation.
 //
-// Bootstraps:
-//   1. credentialless-iframes shim (so the @fkn/lib RPC iframe under our COEP
-//      doesn't get blocked at injection time).
-//   2. ghostty-web (canvas terminal, WASM VT parser from Ghostty).
-//   3. xterm-pty (terminal-agnostic PTY shim; pairs with the c2w worker's
-//      TtyClient over postMessage).
-//   4. The c2w WASI worker (classic worker at /worker.js) and the netstack-
-//      proxy worker (classic worker at /webvpn-stack-worker.js) when
-//      ?net=webvpn / browser / delegate.
-//   5. Exact built-in examples boot their dedicated container WASM. Other URL
-//      hash Dockerfiles pull each FROM ref, then run the generated guest script
-//      when the builder shell prompt appears.
+// Two shapes arrive here. A built-in example is already a converted image, so it
+// starts directly. An edited Dockerfile starts the builder guest instead: base
+// images are pulled in the page and offered to the guest over its local
+// gateway, then a generated script is typed into the shell, which runs Buildah
+// inside the guest.
+//
+// Everything below the UI is @fkn/container: the workers, the network stack,
+// the published ports, and the HTTP client are all the library's.
 
 import { init, Terminal, FitAddon } from 'ghostty-web'
-import {
-  openpty, Termios, TtyServer,
-  ISTRIP, INLCR, IGNCR, ICRNL, IXON,
-  OPOST,
-  ECHO, ECHONL, ICANON, ISIG, IEXTEN,
-} from 'xterm-pty'
-import type { ImageCache, Netstack, VirtualTCPPort } from './webvpn-netstack'
-import type { NetMode } from './shared'
 
-import { newStack } from './stack'
-import { createWebvpnNetstack } from './webvpn-netstack'
+import { createContainer, type ArtifactCache, type Container } from './lib'
 import { pullImage, dockerfileFromRefs } from './registry'
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
-import {
-  isPresetWasmURL,
-  matchPreset,
-  PRESET_RUNTIME_TIMEOUT_MS,
-  PRESET_WASM_PATHS,
-} from './presets'
+import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
 
-// Loaded into globals by /ws-delegate.js (kept as a static asset under public/).
-declare const delegate: (worker: Worker, image: string, address: string) => (msg: MessageEvent) => void
-
-let currentRuntimeStage = 0
-let runtimeFailed = false
-let closeRuntimeResources: (() => void) | null = null
-
-const runtimeTimings: Record<string, number> = {}
-;(window as typeof window & { dockerWasmTimings?: Record<string, number> }).dockerWasmTimings = runtimeTimings
-const markRuntimeTiming = (name: string): void => {
-  if (runtimeTimings[name] !== undefined) return
-  const elapsedMs = Math.round(performance.now())
-  runtimeTimings[name] = elapsedMs
+const timings: Record<string, number> = {}
+;(window as typeof window & { dockerWasmTimings?: Record<string, number> }).dockerWasmTimings = timings
+const mark = (name: string): void => {
+  if (timings[name] !== undefined) return
+  timings[name] = Math.round(performance.now())
   performance.mark('docker-wasm:' + name)
-  console.info('[timing] ' + name + ': ' + elapsedMs + ' ms from navigation')
+  console.info('[timing] ' + name + ': ' + timings[name] + ' ms from navigation')
 }
-markRuntimeTiming('runtime-script-ready')
+mark('runtime-script-ready')
+
+let stage = 0
+let failed = false
+let running: Container | null = null
+
+const setStage = (index: number, message: string, tone: 'normal' | 'error' = 'normal'): void => {
+  if (failed && tone !== 'error') return
+  if (index < stage) {
+    if (tone !== 'error') return
+    index = stage
+  }
+  stage = index
+  if (tone === 'error') failed = true
+  const state = document.getElementById('runtime-state')
+  if (state) {
+    state.textContent = message
+    state.closest<HTMLElement>('.session-title')?.setAttribute('data-tone', tone)
+  }
+  document.querySelectorAll<HTMLElement>('[data-runtime-stage]').forEach((node) => {
+    const position = Number(node.dataset.runtimeStage)
+    node.classList.toggle('is-done', position < index)
+    node.classList.toggle('is-active', position === index)
+  })
+  const progress = document.getElementById('runtime-progress') as HTMLElement | null
+  if (progress) progress.style.width = ((index + 1) * 25) + '%'
+}
 
 type PublishSpec = { guestPort: number }
-
-type VirtualHTTPResponse = {
-  status: number
-  statusText: string
-  httpVersion: string
-  headers: Array<[string, string]>
-  body: string
-  elapsedMs: number
-}
-
-type BrowserConsoleTone = 'command' | 'comment' | 'route' | 'header' | 'success' | 'body' | 'error'
 
 const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
   const value = query.get(QUERY_PARAMS.publish)
@@ -76,125 +66,66 @@ const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
   return { guestPort }
 }
 
-const fetchContainer = async (url: URL): Promise<VirtualHTTPResponse> => {
-  const { request } = await import('@fkn/lib/http')
-  const startedAt = performance.now()
-  return new Promise((resolve, reject) => {
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const finish = (callback: () => void): void => {
-      if (settled) return
-      settled = true
-      if (timer) clearTimeout(timer)
-      req.destroy()
-      callback()
-    }
-    const req = request({
-      protocol: url.protocol,
-      hostname: url.hostname,
-      port: Number(url.port || 80),
-      path: url.pathname + url.search,
-      method: 'GET',
-      headers: { Connection: 'close' },
-    }, (response) => {
-      const decoder = new TextDecoder()
-      let body = ''
-      response.on('data', (chunk: Uint8Array | string) => {
-        if (body.length >= 2_000) return
-        body += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })
-      })
-      response.on('end', () => finish(() => {
-        const headers: Array<[string, string]> = []
-        for (let index = 0; index < response.rawHeaders.length; index += 2) {
-          headers.push([response.rawHeaders[index] || '', response.rawHeaders[index + 1] || ''])
-        }
-        resolve({
-          status: response.statusCode || 0,
-          statusText: response.statusMessage || '',
-          httpVersion: response.httpVersion,
-          headers,
-          body: (body + decoder.decode()).slice(0, 2_000),
-          elapsedMs: Math.round(performance.now() - startedAt),
-        })
-      }))
-      response.on('error', (error) => finish(() => reject(error)))
-    })
-    req.on('error', (error) => finish(() => reject(error)))
-    timer = setTimeout(() => {
-      finish(() => reject(new Error('HTTP request timed out')))
-    }, 5_000)
-    req.end()
-  })
-}
-
-const setRuntimeStage = (stage: number, message: string, tone: 'normal' | 'error' = 'normal'): void => {
-  if (runtimeFailed && tone !== 'error') return
-  if (stage < currentRuntimeStage) {
-    if (tone !== 'error') return
-    stage = currentRuntimeStage
-  }
-  currentRuntimeStage = stage
-  if (tone === 'error') runtimeFailed = true
-  const state = document.getElementById('runtime-state')
-  if (state) {
-    state.textContent = message
-    state.closest<HTMLElement>('.session-title')?.setAttribute('data-tone', tone)
-  }
-  document.querySelectorAll<HTMLElement>('[data-runtime-stage]').forEach((element) => {
-    const index = Number(element.dataset.runtimeStage)
-    element.classList.toggle('is-done', index < stage)
-    element.classList.toggle('is-active', index === stage)
-  })
-  const progress = document.getElementById('runtime-progress') as HTMLElement | null
-  if (progress) progress.style.width = ((stage + 1) * 25) + '%'
-}
-
-// The credentialless-iframes shim is in playground/index.html (synchronous
-// inline script, runs before the module so the patch is in place when @fkn/lib
-// creates its RPC iframe).
-
-const getNetParam = (): { mode: NetMode; param: string | undefined } | null => {
-  const qs = new URLSearchParams(location.search)
-  const value = qs.get(QUERY_PARAMS.net)
-  if (!value) return null
-  const [mode, param] = value.split('=', 2)
-  if (mode !== 'delegate' && mode !== 'browser' && mode !== 'webvpn') return null
-  return { mode, param }
-}
-
-const assertWasmAsset = async (url: string, label: string): Promise<void> => {
-  const response = await fetch(url, { method: 'HEAD', credentials: 'same-origin' })
-  const type = response.headers.get('content-type') || 'unknown content type'
-  if (!response.ok || !type.toLowerCase().includes('application/wasm')) {
-    throw new Error(label + ' is unavailable at ' + url + ' (' + response.status + ', ' + type + ')')
-  }
-}
-
-const resolveVersionedAsset = (path: string): string =>
+const resolveAsset = (path: string): string =>
   new URL(withWasmAssetVersion(path), location.href).toString()
 
-const main = async () => {
-  const queryParams = new URLSearchParams(location.search)
-  const publishSpec = getPublishSpec(queryParams)
-  const runParam = queryParams.get(QUERY_PARAMS.run)
+// The guest console is a TTY. Keeping a plain-text tail of it, with the escape
+// sequences removed, is how the page notices a shell prompt or one of the
+// script's markers without scraping the rendered grid.
+const ANSI = /\u001B(?:\[[0-9;?]*[ -/]*[@-~]|[()][A-Za-z0-9]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)?|[=>NOM78])/g
+
+class ConsoleTail {
+  private text = ''
+  private decoder = new TextDecoder()
+  readonly markers = {
+    buildOk: false,
+    buildFailed: false,
+    runFailed: false,
+    serviceReady: false,
+    serviceFailed: false,
+  }
+
+  push (bytes: Uint8Array): void {
+    const chunk = this.decoder.decode(bytes, { stream: true }).replace(ANSI, '')
+    this.text = (this.text + chunk).slice(-4096)
+    this.markers.buildOk ||= chunk.includes('__FKN_BUILD_OK__')
+    this.markers.buildFailed ||= chunk.includes('__FKN_BUILD_FAILED__')
+    this.markers.runFailed ||= chunk.includes('__FKN_RUN_FAILED__')
+    this.markers.serviceReady ||= chunk.includes('__FKN_SERVICE_READY__')
+    this.markers.serviceFailed ||= chunk.includes('__FKN_SERVICE_FAILED__')
+  }
+
+  // True once the tail ends at a shell prompt, meaning the guest is waiting for
+  // input rather than still printing.
+  atPrompt (): boolean {
+    return /[#$]\s*$/.test(this.text.replace(/\r/g, '').trimEnd())
+  }
+
+  atContainerPrompt (): boolean {
+    return /\/\s*#\s*$/.test(this.text.replace(/\r/g, '').trimEnd())
+  }
+}
+
+type BrowserConsoleTone = 'command' | 'comment' | 'route' | 'header' | 'success' | 'body' | 'error'
+
+const main = async (): Promise<void> => {
+  const query = new URLSearchParams(location.search)
+  const publishSpec = getPublishSpec(query)
+  const runParam = query.get(QUERY_PARAMS.run)
   if (runParam !== null && runParam !== 'default') {
     throw new Error('run must be default when provided')
   }
-  const runImageDefault = runParam === 'default'
-  if ((publishSpec !== null) !== runImageDefault) {
+  const serviceMode = publishSpec !== null && runParam === 'default'
+  if ((publishSpec !== null) !== (runParam === 'default')) {
     throw new Error('publish=tcp:<port> and run=default must be used together')
   }
-  const serviceMode = publishSpec !== null && runImageDefault
-  const netParam = getNetParam()
-  if (publishSpec && netParam?.mode !== 'webvpn') {
-    throw new Error('virtual guest ports require ?net=webvpn')
-  }
-  const dockerfileMatch = location.hash.match(new RegExp('(?:^#|&)' + HASH_KEY_DOCKERFILE + '=([^&]+)'))
+
+  const hashMatch = location.hash.match(new RegExp('(?:^#|&)' + HASH_KEY_DOCKERFILE + '=([^&]+)'))
   let dockerfileB64: string | null = null
   let dockerfileText: string | null = null
-  if (dockerfileMatch?.[1]) {
+  if (hashMatch?.[1]) {
     try {
-      dockerfileB64 = decodeURIComponent(dockerfileMatch[1])
+      dockerfileB64 = decodeURIComponent(hashMatch[1])
       dockerfileText = b64decodeUtf8(dockerfileB64)
     } catch {
       throw new Error('Dockerfile hash is not valid base64')
@@ -204,10 +135,9 @@ const main = async () => {
     throw new Error('virtual service mode requires a Dockerfile')
   }
 
-  const preset = dockerfileText === null ? null : matchPreset(dockerfileText, publishSpec?.guestPort ?? null)
-  // The netstack bridge waits on entries in this cache when the guest requests
-  // an image archive or generated script from its local gateway.
-  const imageCache: ImageCache = new Map()
+  const preset = dockerfileText === null
+    ? null
+    : matchPreset(dockerfileText, publishSpec?.guestPort ?? null)
 
   const servicePanel = document.getElementById('service-panel')
   const serviceEndpoint = document.getElementById('service-endpoint')
@@ -228,118 +158,12 @@ const main = async () => {
     if (browserConsole) browserConsole.hidden = false
   }
 
-  setRuntimeStage(0, 'Loading terminal runtime')
-  await init()
-
-  const xterm = new Terminal({
-    cols: 80,
-    rows: 24,
-    fontSize: innerWidth < 640 ? 12 : 14,
-    cursorBlink: true,
-    theme: {
-      background: '#090a08',
-      foreground: '#e8eadf',
-      cursor: '#bdff38',
-      selectionBackground: '#3548ff',
-    },
-  })
-  // xterm-pty 0.9.4's master.activate calls e.onBinary(handler); ghostty-web
-  // doesn't expose onBinary (no use case in a canvas terminal). Shim it.
-  if (!(xterm as { onBinary?: unknown }).onBinary) {
-    (xterm as unknown as { onBinary: (cb: unknown) => { dispose(): void } })
-      .onBinary = () => ({ dispose () {} })
-  }
-  ;(window as { xterm?: unknown }).xterm = xterm   // driver introspection
-  const terminalEl = document.getElementById('terminal')
-  if (!terminalEl) throw new Error('#terminal not found')
-  xterm.open(terminalEl)
-
-  // Resize the terminal to fill its container. Each xterm.resize(cols, rows)
-  // fires master.onResize -> slave.notifyResize, which pushes SIGWINCH (with
-  // the new winsize) up to the c2w guest.
-  const fitAddon = new FitAddon()
-  xterm.loadAddon(fitAddon)
-  fitAddon.fit()
-  fitAddon.observeResize()
-  // FitAddon drops observer events during its short resize lock. Refit once
-  // after the final service layout has settled so no canvas rows are clipped.
-  setTimeout(() => fitAddon.fit(), 75)
-  markRuntimeTiming('terminal-ready')
-
-  const { master, slave } = openpty()
-  const runtimeMarkers = {
-    buildOk: false,
-    buildFailed: false,
-    runFailed: false,
-    serviceReady: false,
-    serviceFailed: false,
-  }
-  const markerDecoder = new TextDecoder()
-  let markerTail = ''
-  master.onWrite(([bytes]: [Uint8Array, () => void]) => {
-    const output = markerTail + markerDecoder.decode(bytes, { stream: true })
-    runtimeMarkers.buildOk ||= output.includes('__FKN_BUILD_OK__')
-    runtimeMarkers.buildFailed ||= output.includes('__FKN_BUILD_FAILED__')
-    runtimeMarkers.runFailed ||= output.includes('__FKN_RUN_FAILED__')
-    runtimeMarkers.serviceReady ||= output.includes('__FKN_SERVICE_READY__')
-    runtimeMarkers.serviceFailed ||= output.includes('__FKN_SERVICE_FAILED__')
-    markerTail = output.slice(-256)
-  })
-  const termios = slave.ioctl('TCGETS')
-  // Pass through bytes verbatim - the c2w guest does its own line discipline.
-  const iflag = termios.iflag & ~(ISTRIP | INLCR | IGNCR | ICRNL | IXON)
-  const oflag = termios.oflag & ~OPOST
-  const lflag = termios.lflag & ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN)
-  slave.ioctl('TCSETS', new Termios(iflag, oflag, termios.cflag, lflag, termios.cc))
-  xterm.loadAddon(master as Parameters<typeof xterm.loadAddon>[0])
-
-  const wasmUrl = queryParams.get(QUERY_PARAMS.wasmUrl)
-  const wasmId = queryParams.get(QUERY_PARAMS.wasm)
-  const workerImage = preset
-    ? resolveVersionedAsset(PRESET_WASM_PATHS[preset])
-    : wasmUrl
-      ? isPresetWasmURL(wasmUrl)
-        ? resolveVersionedAsset('/playground/playground.wasm')
-        : new URL(wasmUrl, location.href).toString()
-      : wasmId
-        ? new URL('/wasm/' + wasmId + '/out.wasm', location.href).toString()
-        : resolveVersionedAsset('/out.wasm')
-
-  const stackImage = netParam?.mode === 'browser'
-    ? resolveVersionedAsset('/c2w-net-proxy.wasm')
-    : netParam?.mode === 'webvpn'
-      ? resolveVersionedAsset('/c2w-webvpn-proxy.wasm')
-      : null
-  await Promise.all([
-    assertWasmAsset(workerImage, 'Guest image'),
-    ...(stackImage ? [assertWasmAsset(stackImage, 'Network stack')] : []),
-  ])
-  markRuntimeTiming('wasm-assets-validated')
-  setRuntimeStage(0, 'Booting Linux guest')
-
-  // c2w-webvpn lazy init: build the netstack the first time a webvpn_* arrives.
-  let webvpn: Netstack | null = null
-  const ensureWebvpn = (): Netstack | null => {
-    if (webvpn) return webvpn
-    webvpn = createWebvpnNetstack({ imageCache })
-    return webvpn
-  }
-
-  const closeWebvpn = (): void => {
-    if (webvpn) void webvpn.close().catch((error) => console.log('[webvpn] close failed: ' + error))
-  }
-  closeRuntimeResources = closeWebvpn
-  addEventListener('pagehide', closeWebvpn, { once: true })
-
-  let virtualPortPromise: Promise<VirtualTCPPort> | null = null
-  let probeInFlight = false
-  let browserRequestCount = 0
-  const setBrowserConsoleState = (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error'): void => {
+  const setConsoleState = (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error'): void => {
     if (!browserConsoleState) return
     browserConsoleState.textContent = label
     browserConsoleState.dataset.tone = tone
   }
-  const writeBrowserConsole = (prompt: string, message: string, tone: BrowserConsoleTone): void => {
+  const writeConsole = (prompt: string, message: string, tone: BrowserConsoleTone): void => {
     if (!browserConsoleOutput) return
     const line = document.createElement('div')
     line.className = 'browser-console-line is-' + tone
@@ -351,238 +175,271 @@ const main = async () => {
     browserConsoleOutput.append(line)
     browserConsoleOutput.scrollTop = browserConsoleOutput.scrollHeight
   }
-  const getVirtualHTTPURL = (virtualPort: VirtualTCPPort): URL => {
-    const host = virtualPort.virtualHost.includes(':')
-      ? '[' + virtualPort.virtualHost + ']'
-      : virtualPort.virtualHost
-    return new URL('http://' + host + ':' + virtualPort.virtualPort + '/')
-  }
-  const initializeBrowserConsole = (virtualPort: VirtualTCPPort): void => {
-    if (!browserConsoleOutput) return
-    const url = getVirtualHTTPURL(virtualPort)
-    browserConsoleOutput.replaceChildren()
-    writeBrowserConsole('//', 'Live code running in this page\'s browser main thread.', 'comment')
-    writeBrowserConsole('//', 'fetchContainer uses @fkn/lib/http over FKN virtual TCP.', 'comment')
-    writeBrowserConsole('>', 'const url = ' + JSON.stringify(url.href), 'command')
-    writeBrowserConsole('>', 'let response', 'command')
-    writeBrowserConsole('->', 'Docker guest :' + virtualPort.guestPort, 'route')
-    setBrowserConsoleState('Port ready', 'waiting')
-  }
-  const closeVirtualPort = (): void => {
-    if (virtualPortPromise) void virtualPortPromise.then((virtualPort) => virtualPort.close()).catch(() => {})
-  }
+
+  setStage(0, 'Loading terminal runtime')
+  await init()
+
+  const terminal = new Terminal({
+    cols: 80,
+    rows: 24,
+    fontSize: innerWidth < 640 ? 12 : 14,
+    cursorBlink: true,
+    theme: {
+      background: '#090a08',
+      foreground: '#e8eadf',
+      cursor: '#bdff38',
+      selectionBackground: '#3548ff',
+    },
+  })
+  ;(window as { xterm?: unknown }).xterm = terminal   // driver introspection
+  const terminalElement = document.getElementById('terminal')
+  if (!terminalElement) throw new Error('#terminal not found')
+  terminal.open(terminalElement)
+
+  const fitAddon = new FitAddon()
+  terminal.loadAddon(fitAddon)
+  fitAddon.fit()
+  fitAddon.observeResize()
+  // The addon drops observer events during its short resize lock, so refit once
+  // after the service layout has settled or the bottom rows stay clipped.
+  setTimeout(() => fitAddon.fit(), 75)
+  mark('terminal-ready')
+
+  const imageURL = preset
+    ? resolveAsset(PRESET_WASM_PATHS[preset])
+    : (() => {
+        const requested = query.get(QUERY_PARAMS.wasmUrl)
+        const legacyId = query.get(QUERY_PARAMS.wasm)
+        if (requested) {
+          // A preset URL without a matching Dockerfile means the source was
+          // edited, so fall back to the builder guest.
+          return isPresetWasmURL(requested)
+            ? resolveAsset('/playground/playground.wasm')
+            : new URL(requested, location.href).toString()
+        }
+        if (legacyId) return new URL('/wasm/' + legacyId + '/out.wasm', location.href).toString()
+        return resolveAsset('/out.wasm')
+      })()
+
+  // The builder guest fetches base images and its generated script from here.
+  const artifacts: ArtifactCache = new Map()
+  const tail = new ConsoleTail()
+
+  setStage(0, 'Booting Linux guest')
+  const container = createContainer({
+    image: imageURL,
+    netstackImage: resolveAsset('/c2w-webvpn-proxy.wasm'),
+    ports: publishSpec ? [publishSpec.guestPort] : [],
+    artifacts,
+    columns: terminal.cols,
+    rows: terminal.rows,
+    onLog: (bytes) => {
+      terminal.write(bytes)
+      tail.push(bytes)
+    },
+    onStatus: (status) => {
+      if (status.phase === 'compiled' && status.source === 'guest') mark('wasm-ready')
+      if (status.phase === 'running' && status.source === 'guest') mark('guest-started')
+      if (status.phase === 'failed') setStage(stage, 'Runtime failed: ' + status.error.message, 'error')
+    },
+  })
+  running = container
+  addEventListener('pagehide', () => { void container.stop() }, { once: true })
+
+  terminal.onData((data) => container.write(data))
+  terminal.onResize(({ cols, rows }) => container.resize(cols, rows))
+
+  await container.ready
+  mark('workers-started')
 
   if (publishSpec) {
-    const netstack = ensureWebvpn()
-    if (!netstack) throw new Error('FKN netstack is unavailable')
-    virtualPortPromise = netstack.listenTCP(publishSpec.guestPort).then((virtualPort) => {
-      if (serviceEndpoint) {
-        serviceEndpoint.textContent = virtualPort.virtualHost + ':' + virtualPort.virtualPort +
-          ' -> guest :' + virtualPort.guestPort
-      }
-      initializeBrowserConsole(virtualPort)
-      markRuntimeTiming('virtual-listener-ready')
-      return virtualPort
-    }).catch((error) => {
-      if (serviceResult) serviceResult.textContent = 'Virtual listener failed: ' + error
-      setBrowserConsoleState('Failed', 'error')
-      writeBrowserConsole('!', 'Virtual listener failed: ' + error, 'error')
-      setRuntimeStage(currentRuntimeStage, 'Virtual listener failed', 'error')
-      throw error
-    })
-    await virtualPortPromise
+    const port = container.ports[0]
+    if (port && serviceEndpoint) {
+      serviceEndpoint.textContent = port.host + ':' + port.port + ' -> guest :' + port.guestPort
+    }
+    if (port && browserConsoleOutput) {
+      browserConsoleOutput.replaceChildren()
+      writeConsole('//', 'Live code running in this page\'s browser main thread.', 'comment')
+      writeConsole('//', 'container.fetch goes over an in-process TCP route, not the network.', 'comment')
+      writeConsole('>', 'const container = createContainer({ image, ports: [' + port.guestPort + '] })', 'command')
+      writeConsole('->', 'Docker guest :' + port.guestPort + ' via ' + port.origin, 'route')
+      setConsoleState('Port ready', 'waiting')
+    }
+    mark('virtual-listener-ready')
   }
 
-  const worker = new Worker('/worker.js' + location.search)
+  let requestCount = 0
+  let probing = false
 
-  const probeService = async (retryForMs: number, startup = false): Promise<void> => {
-    if (!virtualPortPromise || !serviceResult || !serviceProbe || probeInFlight) return
-    probeInFlight = true
-    serviceProbe.disabled = true
-    const retryDeadline = performance.now() + retryForMs
+  const sendRequest = async (): Promise<void> => {
+    if (!serviceResult || probing) return
+    probing = true
+    if (serviceProbe) serviceProbe.disabled = true
+    const startedAt = performance.now()
+    requestCount++
+    if (requestCount > 1) writeConsole('//', 'Request ' + requestCount, 'comment')
+    writeConsole('>', 'response = await container.fetch("/")', 'command')
+    setConsoleState('Fetching', 'fetching')
+    serviceResult.textContent = requestCount === 1 ? 'Waiting for the guest service' : 'Sending GET /'
     try {
-      const virtualPort = await virtualPortPromise
-      const url = getVirtualHTTPURL(virtualPort)
-      let attempt = 0
-      browserRequestCount++
-      if (browserRequestCount > 1) {
-        writeBrowserConsole('//', 'Request ' + browserRequestCount, 'comment')
-      }
-      writeBrowserConsole('>', 'response = await fetchContainer(url)', 'command')
-      writeBrowserConsole('->', 'GET ' + url.pathname + ' -> Docker guest :' + virtualPort.guestPort, 'route')
-      while (true) {
-        setBrowserConsoleState('Fetching', 'fetching')
+      const response = await container.fetch('/')
+      const elapsedMs = Math.round(performance.now() - startedAt)
+      mark('guest-service-ready')
+      mark('first-http-response')
+      serviceResult.textContent = response.status +
+        (response.statusText ? ' ' + response.statusText : '') + ' / ' + elapsedMs + ' ms'
+      writeConsole('<', 'HTTP ' + response.status +
+        (response.statusText ? ' ' + response.statusText : '') + ' (' + elapsedMs + ' ms)', 'success')
+      response.headers.forEach((value, name) => writeConsole('', name + ': ' + value, 'header'))
+      const body = (await response.text()).slice(0, 2_000)
+      const contentType = (response.headers.get('content-type') || '').toLowerCase()
+      let expression = 'await response.text()'
+      let rendered = JSON.stringify(body)
+      if (contentType.includes('application/json')) {
         try {
-          serviceResult.textContent = attempt === 0 ? 'Sending GET /' : 'Waiting for guest service, retry ' + attempt
-          const response = await fetchContainer(url)
-          markRuntimeTiming('guest-service-ready')
-          markRuntimeTiming('first-http-response')
-          serviceResult.textContent = response.status + (response.statusText ? ' ' + response.statusText : '') +
-            ' / ' + response.elapsedMs + ' ms'
-          const statusLine = 'HTTP/' + response.httpVersion + ' ' + response.status +
-            (response.statusText ? ' ' + response.statusText : '') + ' (' + response.elapsedMs + ' ms)'
-          writeBrowserConsole('<', statusLine, 'success')
-          for (const [name, value] of response.headers) {
-            writeBrowserConsole('', name.toLowerCase() + ': ' + value, 'header')
-          }
-          const contentType = response.headers
-            .find(([name]) => name.toLowerCase() === 'content-type')?.[1].toLowerCase() || ''
-          let bodyExpression = 'response.body'
-          let bodyOutput = JSON.stringify(response.body)
-          if (contentType.includes('application/json')) {
-            try {
-              bodyExpression = 'JSON.parse(response.body)'
-              bodyOutput = JSON.stringify(JSON.parse(response.body), null, 2)
-            } catch {}
-          }
-          writeBrowserConsole('>', bodyExpression, 'command')
-          writeBrowserConsole('<', bodyOutput, 'body')
-          setBrowserConsoleState(response.status + (response.statusText ? ' ' + response.statusText : ''), 'success')
-          setRuntimeStage(3, 'HTTP service reachable through FKN in-process')
-          return
-        } catch (error) {
-          const canRetry = retryForMs > 0 && performance.now() < retryDeadline
-          if (!canRetry) {
-            writeBrowserConsole('!', String(error), 'error')
-            throw error
-          }
-          if (startup) {
-            setBrowserConsoleState('Waiting for guest service', 'waiting')
-          } else {
-            writeBrowserConsole('//', 'No response yet; retrying', 'comment')
-            setBrowserConsoleState('Retrying', 'waiting')
-          }
-          await new Promise((resolve) => setTimeout(resolve, startup ? 2_000 : 250))
-          attempt++
-        }
+          expression = 'await response.json()'
+          rendered = JSON.stringify(JSON.parse(body), null, 2)
+        } catch { /* not valid JSON after all */ }
       }
+      writeConsole('>', expression, 'command')
+      writeConsole('<', rendered, 'body')
+      setConsoleState(String(response.status), 'success')
+      setStage(3, 'HTTP service reachable through the in-process route')
     } catch (error) {
-      serviceResult.textContent = 'Request failed: ' + error
-      setBrowserConsoleState('Fetch failed', 'error')
-      if (startup) setRuntimeStage(3, 'HTTP request did not complete')
+      const message = error instanceof Error ? error.message : String(error)
+      serviceResult.textContent = 'Request failed: ' + message
+      writeConsole('!', message, 'error')
+      setConsoleState('Failed', 'error')
+      if (requestCount === 1) setStage(3, 'HTTP request did not complete')
     } finally {
-      probeInFlight = false
-      serviceProbe.disabled = false
+      probing = false
+      if (serviceProbe) serviceProbe.disabled = false
     }
   }
 
-  if (serviceProbe) serviceProbe.addEventListener('click', () => { void probeService(12_000) })
+  if (serviceProbe) serviceProbe.addEventListener('click', () => { void sendRequest() })
 
-  let nwStack: ((msg: MessageEvent) => void) | undefined
-  if (netParam) {
-    if (netParam.mode === 'delegate') {
-      if (!netParam.param) throw new Error('?net=delegate requires =<address>')
-      nwStack = delegate(worker, workerImage, netParam.param)
-    } else if (netParam.mode === 'browser') {
-      nwStack = newStack(
-        worker, workerImage,
-        new Worker('/stack-worker.js' + location.search),
-        resolveVersionedAsset('/c2w-net-proxy.wasm'),
-        ensureWebvpn,
-      )
-    } else if (netParam.mode === 'webvpn') {
-      nwStack = newStack(
-        worker, workerImage,
-        new Worker('/webvpn-stack-worker.js' + location.search),
-        resolveVersionedAsset('/c2w-webvpn-proxy.wasm'),
-        ensureWebvpn,
-      )
-    }
-  }
-  if (!nwStack) {
-    worker.postMessage({ type: 'init', imagename: workerImage })
-  }
-  new TtyServer(slave).start(worker as unknown as Parameters<TtyServer['start']>[0], nwStack)
-  markRuntimeTiming('workers-started')
-
-  const terminalTail = (count: number): string => {
-    return [xterm.buffer.normal, xterm.buffer.alternate]
-      .map((buf) => {
-        const cursorRow = buf.baseY + buf.cursorY
-        let text = ''
-        for (let y = Math.max(0, cursorRow - count); y <= cursorRow; y++) {
-          const line = buf.getLine(y)
-          if (line) text += line.translateToString(true) + '\n'
-        }
-        return text.trimEnd()
-      })
-      .filter(Boolean)
-      .join('\n')
+  // Watches the console tail for a marker the generated script printed, or for
+  // the shell settling at a prompt.
+  const watch = (check: () => boolean, onHit: () => void, intervalMs = 400): void => {
+    const timer = setInterval(() => {
+      if (!check()) return
+      clearInterval(timer)
+      onHit()
+    }, intervalMs)
   }
 
-  // Exact examples are complete container2wasm images, so they need no nested
-  // Buildah import. Other Dockerfiles keep the registry and builder path.
-  if (dockerfileText === null || dockerfileB64 === null) {
-    const promptTimer = setInterval(() => {
-      if (!/# *$/.test(terminalTail(2).trimEnd())) return
-      clearInterval(promptTimer)
-      markRuntimeTiming('guest-shell-ready')
-      setRuntimeStage(3, 'Linux shell ready')
-    }, 500)
-    return
-  }
-
+  // A built-in example is a complete image: no registry pull, no Buildah.
   if (preset) {
-    markRuntimeTiming('preset-runtime-started')
+    mark('preset-runtime-started')
     if (serviceMode) {
-      setRuntimeStage(1, 'Dedicated HTTP runtime selected')
-      setRuntimeStage(2, 'Starting HTTP service')
-      if (serviceResult) serviceResult.textContent = 'Waiting for guest service on :' + publishSpec?.guestPort
-      void probeService(PRESET_RUNTIME_TIMEOUT_MS, true)
+      setStage(1, 'Dedicated HTTP runtime selected')
+      setStage(2, 'Starting HTTP service')
+      if (serviceProbe) serviceProbe.disabled = false
+      void sendRequest()
       return
     }
-
-    setRuntimeStage(1, 'Dedicated shell runtime selected')
-    setRuntimeStage(2, 'Starting container shell')
-    const promptTimer = setInterval(() => {
-      if (!/# *$/.test(terminalTail(2).trimEnd())) return
-      clearInterval(promptTimer)
-      markRuntimeTiming('guest-shell-ready')
-      markRuntimeTiming('container-shell-ready')
-      setRuntimeStage(3, 'Container shell ready')
-    }, 500)
+    setStage(1, 'Dedicated shell runtime selected')
+    setStage(2, 'Starting container shell')
+    watch(() => tail.atPrompt(), () => {
+      mark('guest-shell-ready')
+      mark('container-shell-ready')
+      setStage(3, 'Container shell ready')
+    })
     return
   }
 
-  // Re-pad for the in-guest busybox base64 -d which is strict about padding.
-  let dockerfileB64Padded = dockerfileB64
-  while (dockerfileB64Padded.length % 4) dockerfileB64Padded += '='
+  // No Dockerfile at all: a bare guest with a shell.
+  if (dockerfileText === null || dockerfileB64 === null) {
+    watch(() => tail.atPrompt(), () => {
+      mark('guest-shell-ready')
+      setStage(3, 'Linux shell ready')
+    })
+    return
+  }
+
+  await runBuilder({
+    container,
+    artifacts,
+    tail,
+    terminal,
+    dockerfileText,
+    dockerfileB64,
+    publishSpec,
+    serviceMode,
+    serviceResult,
+    serviceProbe,
+    setConsoleState,
+    writeConsole,
+    sendRequest,
+    watch,
+  })
+}
+
+type BuilderContext = {
+  container: Container
+  artifacts: ArtifactCache
+  tail: ConsoleTail
+  terminal: Terminal
+  dockerfileText: string
+  dockerfileB64: string
+  publishSpec: PublishSpec | null
+  serviceMode: boolean
+  serviceResult: HTMLOutputElement | null
+  serviceProbe: HTMLButtonElement | null
+  setConsoleState: (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error') => void
+  writeConsole: (prompt: string, message: string, tone: BrowserConsoleTone) => void
+  sendRequest: () => Promise<void>
+  watch: (check: () => boolean, onHit: () => void, intervalMs?: number) => void
+}
+
+// Builds an edited Dockerfile inside the guest with Buildah. The base images are
+// pulled here, in the page, and served to the guest over its local gateway,
+// because the guest has no registry credentials and no CORS exemption.
+const runBuilder = async (context: BuilderContext): Promise<void> => {
+  const {
+    container, artifacts, tail, terminal, dockerfileText, dockerfileB64,
+    publishSpec, serviceMode, serviceResult, serviceProbe,
+    setConsoleState, writeConsole, sendRequest, watch,
+  } = context
+
+  let padded = dockerfileB64
+  while (padded.length % 4) padded += '='
 
   const refs = dockerfileFromRefs(dockerfileText)
-  // A compact custom HTTP Dockerfile can run Buildah's final working container
-  // without creating another container from the completed image.
   const instructions: string[] = []
-  const parsedInstructions = dockerfileText.split('\n').every((line) => {
+  const parsed = dockerfileText.split('\n').every((line) => {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) return true
     const instruction = /^([A-Za-z]+)/.exec(trimmed)?.[1]?.toUpperCase()
     if (instruction) instructions.push(instruction)
     return instruction !== undefined
   })
-  const canReuseBuildContainer = parsedInstructions &&
-    instructions.join(',') === 'FROM,EXPOSE,CMD'
-  if (refs.length === 0) markRuntimeTiming('base-images-ready')
-  setRuntimeStage(1, refs.length === 0
+  // A Dockerfile that adds no layers can run Buildah's own working container
+  // instead of creating a second one from the finished image.
+  const reuseBuildContainer = parsed && instructions.join(',') === 'FROM,EXPOSE,CMD'
+
+  if (refs.length === 0) mark('base-images-ready')
+  setStage(1, refs.length === 0
     ? 'No base image pull required'
     : 'Pulling ' + refs.length + ' base image' + (refs.length === 1 ? '' : 's'))
+
   let readyRefs = 0
   for (const ref of refs) {
-    if (imageCache.has(ref)) continue
+    if (artifacts.has(ref)) continue
     const entry: { promise: Promise<Uint8Array> | null; bytes: Uint8Array | null } =
       { promise: null, bytes: null }
-    imageCache.set(ref, entry)
-    console.log('[registry] pulling ' + ref)
-    entry.promise = pullImage(ref, { onLog: (s) => console.log('[registry] ' + ref + ': ' + s) })
-      .then((b) => { entry.bytes = b; return b })
+    artifacts.set(ref, entry)
+    entry.promise = pullImage(ref, { onLog: (line) => console.log('[registry] ' + ref + ': ' + line) })
+      .then((bytes) => { entry.bytes = bytes; return bytes })
     entry.promise.then(() => {
       readyRefs++
       if (readyRefs === refs.length) {
-        markRuntimeTiming('base-images-ready')
-        setRuntimeStage(1, 'Base image ready, Linux booting')
+        mark('base-images-ready')
+        setStage(1, 'Base image ready, Linux booting')
       }
-    }, (error) => {
-      closeVirtualPort()
-      setRuntimeStage(1, 'Image pull failed: ' + error, 'error')
+    }, (error: unknown) => {
+      setStage(1, 'Image pull failed: ' + String(error), 'error')
     })
   }
 
@@ -594,46 +451,46 @@ const main = async () => {
     '[storage.options.overlay]\\n' +
     'mountopt = "nodev"\\n'
 
-  let imageLoadBlock = ''
+  let loadBlock = ''
   for (const ref of refs) {
-    const enc = encodeURIComponent(ref)
+    const encoded = encodeURIComponent(ref)
     const safe = ref.replace(/[^A-Za-z0-9._-]/g, '_')
-    imageLoadBlock +=
+    loadBlock +=
       'echo "== pull ' + ref + ' =="\n' +
-      "wget -q 'http://192.168.127.1:9090/img/" + enc + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
+      "wget -q 'http://192.168.127.1:9090/img/" + encoded + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
       'buildah pull docker-archive:/tmp/' + safe + '.tar\n' +
       'rm -f /tmp/' + safe + '.tar\n'
   }
-  const imagePreparation =
-    "echo '" + dockerfileB64Padded + "' | base64 -d > Dockerfile\n" +
-    'echo == buildah build ==\n' +
-    'buildah bud' + (canReuseBuildContainer ? ' --layers --rm=false' : '') +
-    ' --isolation chroot --network host --pull=never -t userimg .\n' +
-    'echo == build complete ==\n'
+
   const buildCommands =
     'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
     "printf 'nameserver 192.168.127.1\\n' > /etc/resolv.conf\n" +
     "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
-    imageLoadBlock +
-    imagePreparation
-  const targetImageSetup = '  target_image=userimg\n'
-  const defaultCommandSetup = runImageDefault
+    loadBlock +
+    "echo '" + padded + "' | base64 -d > Dockerfile\n" +
+    'echo == buildah build ==\n' +
+    'buildah bud' + (reuseBuildContainer ? ' --layers --rm=false' : '') +
+    ' --isolation chroot --network host --pull=never -t userimg .\n' +
+    'echo == build complete ==\n'
+
+  const defaultCommandSetup = serviceMode
     ? 'cmdfile=/tmp/fkn-image-command\n' +
       'buildah inspect --type image --format \'{{range .Docker.Config.Entrypoint}}{{printf "%s%c" . 0}}{{end}}{{range .Docker.Config.Cmd}}{{printf "%s%c" . 0}}{{end}}\' "$target_image" > "$cmdfile"\n' +
       'set --\n' +
       'while IFS= read -r -d \'\' arg; do set -- "$@" "$arg"; done < "$cmdfile"\n' +
       '[ "$#" -gt 0 ] || { echo "image has no default command" >&2; echo __FKN_SERVICE_"FAILED"__; exit 1; }\n'
     : ''
-  const containerCommand = runImageDefault ? ' "$@"' : ' /bin/sh'
-  const createContainer = canReuseBuildContainer
+  const containerCommand = serviceMode ? ' "$@"' : ' /bin/sh'
+  const createContainerLine = reuseBuildContainer
     ? 'build_containers=$(buildah containers -q); ' +
       'ctr=$(printf "%s\\n" "$build_containers" | /bin/busybox tail -n 1); ' +
       '( sleep 30; for candidate in $build_containers; do ' +
       '[ "$candidate" = "$ctr" ] || buildah rm "$candidate" >/dev/null 2>&1 || true; done ) & ' +
       '[ -n "$ctr" ] || ctr=$(buildah from "$target_image")'
     : 'ctr=$(buildah from "$target_image")'
-  const containerLaunch = serviceMode && publishSpec
-    ? '  ' + createContainer + ' || { echo __FKN_SERVICE_"FAILED"__; exit 1; }\n' +
+
+  const launch = serviceMode && publishSpec
+    ? '  ' + createContainerLine + ' || { echo __FKN_SERVICE_"FAILED"__; exit 1; }\n' +
       '  printf "== image command =="; printf " <%s>" "$@"; printf "\\n"\n' +
       '  (\n' +
       '    attempt=0\n' +
@@ -658,7 +515,7 @@ const main = async () => {
       '  wait "$readiness_pid" 2>/dev/null || true\n' +
       '  echo __FKN_SERVICE_"FAILED"__\n' +
       '  exit "$status"\n'
-    : '  ' + createContainer + ' || { echo __FKN_RUN_"FAILED"__; exit 1; }\n' +
+    : '  ' + createContainerLine + ' || { echo __FKN_RUN_"FAILED"__; exit 1; }\n' +
       '  if buildah run --network host --terminal --env TERM=dumb "$ctr"' + containerCommand + '; then\n' +
       '    exit 0\n' +
       '  else\n' +
@@ -666,101 +523,90 @@ const main = async () => {
       '    echo __FKN_RUN_"FAILED"__\n' +
       '    exit "$status"\n' +
       '  fi\n'
+
   const script =
     "if sh -eu <<'FKN_BUILD'\n" + buildCommands +
     'FKN_BUILD\n' +
     'then\n' +
     '  echo __FKN_BUILD_"OK"__\n' +
     '  echo == running container ==\n' +
-    targetImageSetup +
+    '  target_image=userimg\n' +
     defaultCommandSetup +
-    containerLaunch +
+    launch +
     'else\n' +
     '  echo __FKN_BUILD_"FAILED"__\n' +
     'fi\n'
 
-  // Serve the generated script through the local artifact bridge to avoid PTY input limits.
-  const buildScriptRef = '__fkn_runtime_build_script__'
-  const buildScriptBytes = new TextEncoder().encode(script)
-  imageCache.set(buildScriptRef, { promise: null, bytes: buildScriptBytes })
-  const buildScriptURL = 'http://192.168.127.1:9090/img/' + encodeURIComponent(buildScriptRef)
-  const launcher = "if wget -q '" + buildScriptURL +
+  // The script goes through the artifact bridge rather than the console: a
+  // multi-kilobyte paste would exceed the PTY's input buffer.
+  const scriptRef = '__fkn_runtime_build_script__'
+  artifacts.set(scriptRef, { promise: null, bytes: new TextEncoder().encode(script) })
+  const launcher = "if wget -q 'http://192.168.127.1:9090/img/" + encodeURIComponent(scriptRef) +
     "' -O /tmp/fkn-build.sh; then sh /tmp/fkn-build.sh; else echo __FKN_BUILD_\"FAILED\"__; fi\n"
 
-  // Wait for the shell to print a "# " prompt before pasting; ghostty-web's
-  // buffer matches xterm.js's (baseY + cursorY → row index; getLine().translateToString()).
-  let sent = false
-  const pasteScript = (): void => {
-    xterm.paste(launcher)
-    markRuntimeTiming('build-script-sent')
-  }
-  const tryFeed = () => {
-    if (sent) return
-    const last = terminalTail(2).trimEnd()
-    if (!/# *$/.test(last)) return
-    sent = true
-    markRuntimeTiming('guest-shell-ready')
-    setRuntimeStage(2, 'Building Dockerfile in Linux')
-    pasteScript()
-  }
-  const iv = setInterval(() => { tryFeed(); if (sent) clearInterval(iv) }, 1000)
-  let serviceProbeStarted = false
+  watch(() => tail.atPrompt(), () => {
+    mark('guest-shell-ready')
+    setStage(2, 'Building Dockerfile in Linux')
+    terminal.paste(launcher)
+    mark('build-script-sent')
+  }, 700)
+
+  let probeStarted = false
   const buildTimer = setInterval(() => {
-    const output = terminalTail(80).trimEnd()
-    if (runtimeMarkers.buildFailed || runtimeMarkers.runFailed || runtimeMarkers.serviceFailed) {
+    const markers = tail.markers
+    if (markers.buildFailed || markers.runFailed || markers.serviceFailed) {
       clearInterval(buildTimer)
-      closeVirtualPort()
       if (serviceProbe) serviceProbe.disabled = true
-      if (runtimeMarkers.serviceFailed && serviceResult) {
-        serviceResult.textContent = serviceProbeStarted
+      if (markers.serviceFailed && serviceResult) {
+        serviceResult.textContent = probeStarted
           ? 'The image service exited'
           : 'The image command did not open guest port ' + publishSpec?.guestPort
       }
       if (serviceMode) {
-        const message = runtimeMarkers.buildFailed
+        setConsoleState(markers.buildFailed ? 'Build failed' : 'Service stopped', 'error')
+        writeConsole('!', markers.buildFailed
           ? 'Dockerfile build failed before the HTTP request.'
-          : serviceProbeStarted
-            ? 'The Docker HTTP service stopped and its virtual route closed.'
-            : 'The Docker HTTP service did not open guest port ' + publishSpec?.guestPort + '.'
-        setBrowserConsoleState(runtimeMarkers.buildFailed ? 'Build failed' : 'Service stopped', 'error')
-        writeBrowserConsole('!', message, 'error')
+          : probeStarted
+            ? 'The Docker HTTP service stopped and its route closed.'
+            : 'The Docker HTTP service did not open guest port ' + publishSpec?.guestPort + '.',
+        'error')
       }
-      setRuntimeStage(runtimeMarkers.buildFailed ? 2 : 3,
-        runtimeMarkers.buildFailed
+      setStage(markers.buildFailed ? 2 : 3,
+        markers.buildFailed
           ? 'Dockerfile build failed'
-          : runtimeMarkers.runFailed
+          : markers.runFailed
             ? 'Container failed to start'
-          : serviceProbeStarted ? 'Image service stopped' : 'Image service failed to start',
+            : probeStarted ? 'Image service stopped' : 'Image service failed to start',
         'error')
       return
     }
-    if (!runtimeMarkers.buildOk) return
-    markRuntimeTiming('image-built')
+    if (!markers.buildOk) return
+    mark('image-built')
     if (serviceMode) {
-      if (serviceProbeStarted) return
-      setRuntimeStage(3, 'Starting virtual HTTP service')
+      if (probeStarted) return
+      setStage(3, 'Starting virtual HTTP service')
       if (serviceResult) serviceResult.textContent = 'Waiting for guest service on :' + publishSpec?.guestPort
-      if (!runtimeMarkers.serviceReady) return
-      markRuntimeTiming('guest-service-ready')
+      if (!markers.serviceReady) return
+      mark('guest-service-ready')
+      probeStarted = true
       if (serviceProbe) serviceProbe.disabled = false
-      if (!serviceProbeStarted) {
-        serviceProbeStarted = true
-        void probeService(60_000, true)
-      }
+      void sendRequest()
       return
     }
-    const containerShellReady = /\/ #\s*$/.test(output)
-    setRuntimeStage(3, containerShellReady ? 'Container shell ready' : 'Starting container shell')
-    if (containerShellReady) {
-      markRuntimeTiming('container-shell-ready')
+    const shellReady = tail.atContainerPrompt()
+    setStage(3, shellReady ? 'Container shell ready' : 'Starting container shell')
+    if (shellReady) {
+      mark('container-shell-ready')
       clearInterval(buildTimer)
       if (serviceProbe) serviceProbe.disabled = false
     }
-  }, 1000)
+  }, 700)
+
+  void container
 }
 
-main().catch((e) => {
-  closeRuntimeResources?.()
-  setRuntimeStage(0, 'Runtime failed: ' + e, 'error')
-  console.error('runtime bootstrap failed', e)
+main().catch((error: unknown) => {
+  void running?.stop()
+  setStage(0, 'Runtime failed: ' + String(error instanceof Error ? error.message : error), 'error')
+  console.error('runtime bootstrap failed', error)
 })

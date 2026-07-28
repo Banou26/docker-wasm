@@ -4,7 +4,6 @@ const path = require('node:path')
 const root = path.join(__dirname, '..', 'build')
 const externalArtifacts = [
     'out.wasm',
-    'c2w-net-proxy.wasm',
     'c2w-webvpn-proxy.wasm',
     'playground/playground.wasm',
     'presets/shell.wasm',
@@ -27,7 +26,9 @@ async function files(dir) {
 async function prepare() {
     for (const relative of externalArtifacts) {
         await fsp.rm(path.join(root, relative), { force: true })
-        await fsp.rm(path.join(root, relative + '.gz'), { force: true })
+        for (const encoding of ['.gz', '.br']) {
+            await fsp.rm(path.join(root, relative + encoding), { force: true })
+        }
     }
 
     for (const file of await files(root)) {

@@ -6,6 +6,10 @@ repo="$here/.."
 bucket=fkn-container-assets
 asset_origin=https://container.fkn.app/wasm-assets
 cache_control='public, max-age=31536000, immutable'
+# Brotli, not gzip: it takes the riscv64 demo image from 54 MB to 16 MB, and
+# every browser that can run the runtime at all negotiates it.
+content_encoding=br
+compressed_suffix=.br
 wrangler="$repo/node_modules/.bin/wrangler"
 
 case "${1:-}" in
@@ -97,12 +101,12 @@ for asset in "${assets[@]}"; do
         "$next_manifest" "$manifest_path")"
     object="$object_base.$version$object_suffix"
     url="$asset_origin/$object"
-    compressed="$stage/${source#public/}.gz"
+    compressed="$stage/${source#public/}$compressed_suffix"
 
     "$wrangler" r2 object put "$bucket/$object" \
         --file "$compressed" \
         --content-type "$content_type" \
-        --content-encoding gzip \
+        --content-encoding "$content_encoding" \
         --cache-control "$cache_control" \
         --remote
 
@@ -111,7 +115,7 @@ for asset in "${assets[@]}"; do
     [[ "$actual" == "$version" ]] || { echo "$name R2 digest does not match its object key" >&2; exit 1; }
 
     response="$(curl --silent --show-error --head --write-out $'\n%{http_code}' \
-        -H 'Accept-Encoding: gzip' "$url")"
+        -H "Accept-Encoding: $content_encoding" "$url")"
     status="${response##*$'\n'}"
     headers="${response%$'\n'*}"
     headers="${headers//$'\r'/}"
@@ -121,7 +125,7 @@ for asset in "${assets[@]}"; do
     else
         [[ "$status" == 200 ]] || { echo "$name route returned HTTP $status" >&2; exit 1; }
         [[ "$headers" == *"content-type: $content_type"* ]] || { echo "$name has the wrong content type" >&2; exit 1; }
-        [[ "$headers" == *$'content-encoding: gzip'* ]] || { echo "$name has the wrong content encoding" >&2; exit 1; }
+        [[ "$headers" == *"content-encoding: $content_encoding"* ]] || { echo "$name has the wrong content encoding" >&2; exit 1; }
         [[ "$headers" == *$'cache-control: public, max-age=31536000, immutable'* ]] || { echo "$name has the wrong cache policy" >&2; exit 1; }
 
         routed_actual="$(curl --fail --silent --show-error --compressed "$url" | sha256sum)"
