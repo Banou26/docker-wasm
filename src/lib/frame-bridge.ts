@@ -130,6 +130,7 @@ class Endpoint {
         this.view.status[0] = 0
         break
       case 'recv-is-readable': {
+        this.view.status[0] = 0
         if (this.receive.length > 0) {
           this.view.data[0] = 1
           break
@@ -169,11 +170,20 @@ export class FrameBridge {
   private guestEndpoint: Endpoint
   private netstackEndpoint: Endpoint
 
-  constructor (netstack: () => Netstack | null) {
+  constructor (netstack: () => Netstack | null, onGuestReadable?: () => void) {
     const toGuest = new Queue()
     const toNetstack = new Queue()
     this.guestEndpoint = new Endpoint('guest', toNetstack, toGuest, netstack)
     this.netstackEndpoint = new Endpoint('netstack', toGuest, toNetstack, netstack)
+    if (onGuestReadable) {
+      // The endpoint's own wake releases a parked frame poll. The guest may
+      // instead be parked on its console, so the runtime gets told as well.
+      const release = toGuest.wake
+      toGuest.wake = () => {
+        release?.()
+        onGuestReadable()
+      }
+    }
   }
 
   get guestBuffer (): SharedArrayBuffer { return this.guestEndpoint.buffer }

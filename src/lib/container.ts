@@ -105,7 +105,7 @@ export class Container {
     this.startupGraceMs = options.startupGraceMs ?? 90_000
     this.onStatus = options.onStatus ?? (() => {})
     this.tty = new TtyHost({ columns: options.columns, rows: options.rows })
-    this.bridge = new FrameBridge(() => this.netstack)
+    this.bridge = new FrameBridge(() => this.netstack, () => this.tty.interrupt())
     this.http = new HttpClient({
       connectTimeoutMs: options.connectTimeoutMs,
       responseTimeoutMs: options.responseTimeoutMs,

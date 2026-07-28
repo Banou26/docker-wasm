@@ -117,6 +117,18 @@ export class TtyHost {
     this.releasePoll(true)
   }
 
+  // Ends a parked console poll without any console input arriving.
+  //
+  // The guest polls stdin and its network socket in the same `poll_oneoff`, and
+  // it waits on the console first. Left alone it would sleep out the whole
+  // clock timeout before looking at the socket, which throttles the container's
+  // network to one packet per poll. The runtime calls this the moment frames
+  // are queued for the guest, so the call returns "no console input" and the
+  // guest goes straight on to read them.
+  interrupt (): void {
+    this.releasePoll(this.input.length > 0)
+  }
+
   dispose (): void {
     this.disposed = true
     this.releasePoll(false)

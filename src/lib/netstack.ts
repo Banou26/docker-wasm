@@ -457,6 +457,7 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
         const ref = new TextDecoder().decode(request.ref)
         const entry = artifacts.get(ref)
         if (!entry) {
+          log('artifact ' + ref + ' was requested but is not offered')
           status[0] = -1
           return true
         }
@@ -465,6 +466,7 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
             if (!bytes) throw new Error('artifact ' + ref + ' resolved to nothing')
             entry.bytes = bytes
             status[0] = bytes.length
+            log('artifact ' + ref + ' is ' + bytes.length + ' bytes')
           })
           .catch((error: unknown) => {
             log('artifact ' + ref + ' unavailable: ' + String(error))
@@ -485,6 +487,11 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
         if (slice.length > 0) data.set(slice, 0)
         length[0] = slice.length
         status[0] = 0
+        // Coarse enough not to drown the console on a multi-megabyte artifact,
+        // fine enough to show whether the transfer is progressing or wedged.
+        if (start % (1024 * 1024) < slice.length) {
+          log('artifact ' + ref + ' served ' + start + '/' + entry.bytes.length)
+        }
         return true
       }
 
