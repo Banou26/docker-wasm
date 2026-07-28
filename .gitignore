@@ -8,6 +8,7 @@
 node_modules/
 build/
 dist/
+/lib/
 .vite/
 .wrangler/
 .wasm-publish.*
