@@ -40,4 +40,16 @@ fi
 
 echo "browser: $CDP"
 echo "origin:  $origin"
-CDP="$CDP" ORIGIN="$origin" node "$root/test/page/build.mjs"
+
+failed=0
+# single: the editor page, which is where a reader actually starts.
+# build:  the runtime entry on its own, which shared links and the library use.
+for check in single build; do
+    echo
+    echo "########## $check"
+    CDP="$CDP" ORIGIN="$origin" node "$root/test/page/$check.mjs" || failed=1
+done
+
+echo
+[ "$failed" = 0 ] && echo "page: all checks passing" || echo "page: FAILURES above" >&2
+exit "$failed"
