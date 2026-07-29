@@ -15,7 +15,16 @@ checks, of which 39 are direct comparisons against docker (server 29.3.0).
 ```
 npm run check-fast-path              # needs docker
 npm run check-fast-path -- --offline # parser and emitter only
+npm run check-page                   # real builds in a real browser
 ```
+
+`check-page` is the other half, and it is not optional in practice: the guest
+chosen from the build plan, the artifact bridge, the emulated `wget`, the
+`chroot` and the emulated `tar` exist nowhere else. A bug that made every build
+from the page boot the wrong guest, so that none of the work below ever ran,
+survived precisely because nothing drove that path. It attaches to a chromium
+that is already running rather than launching one, because a headless chromium
+stalls on the in-page gateway fetch.
 
 ## What the checks cover
 

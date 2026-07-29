@@ -47,7 +47,8 @@
     "compress-wasm": "node scripts/compress-wasm.cjs",
     "publish-wasm-assets": "./scripts/publish-wasm-assets.sh",
     "preview": "vite preview",
-    "check-fast-path": "./scripts/check-fast-path.sh"
+    "check-fast-path": "./scripts/check-fast-path.sh",
+    "check-page": "./scripts/check-page.sh"
   },
   "keywords": [
     "docker",
