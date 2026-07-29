@@ -1,4 +1,4 @@
-import { withWasmAssetVersion } from './shared'
+import { b64decodeUtf8, HASH_KEY_DOCKERFILE, withWasmAssetVersion } from './shared'
 import {
   matchPreset,
   PRESET_DOCKERFILES,
@@ -15,6 +15,10 @@ const runBtn = document.getElementById('run-btn') as HTMLButtonElement
 const fileInput = document.getElementById('file-input') as HTMLInputElement
 const editorMeta = document.getElementById('editor-meta')!
 const buildOutlook = document.getElementById('build-outlook')
+const workbench = document.getElementById('workbench')
+const buildStage = document.getElementById('build-stage')
+const buildView = document.getElementById('build-view')
+const buildBack = document.getElementById('build-back')
 const status = document.getElementById('status')!
 const runLabel = document.getElementById('run-label')!
 const flightTitle = document.getElementById('flight-title')!
@@ -187,6 +191,34 @@ for (const button of modeButtons) {
   button.addEventListener('click', () => selectDemoMode(mode))
 }
 
+// The runtime boots into this page rather than another one.
+//
+// Navigating away threw out the guest download the editor had just warmed, and
+// gave the reader a blank page while it started over. `main.ts` reads its
+// configuration from the URL, so the URL is rewritten in place first and the
+// module imported second; the runtime cannot tell the difference, and a reload
+// or a shared link still lands on a build.
+let started = false
+
+const startBuild = async (launchUrl: string): Promise<void> => {
+  if (started) return
+  started = true
+
+  const target = new URL(launchUrl, location.href)
+  history.replaceState(null, '', location.pathname + target.search + target.hash)
+
+  workbench?.setAttribute('hidden', '')
+  buildStage?.removeAttribute('hidden')
+  document.body.classList.add('is-building')
+
+  const [{ mountBuildView }] = await Promise.all([import('./build-view'), Promise.resolve()])
+  if (buildView) mountBuildView(buildView)
+  // Imported last, so the view is subscribed before the first event. Late
+  // subscribers get the history replayed anyway, but not depending on that keeps
+  // the ordering obvious.
+  await import('./main')
+}
+
 const run = (): void => {
   const dockerfile = pasteBox.value
   if (!dockerfile.trim()) return
@@ -195,9 +227,26 @@ const run = (): void => {
   else warmGuest(launch.guest)
   runBtn.disabled = true
   runBtn.setAttribute('aria-busy', 'true')
-  status.textContent = 'Opening runtime'
+  status.textContent = 'Building'
   status.className = 'status ok'
-  location.assign(launch.url)
+  void startBuild(launch.url)
+}
+
+// A reload, or somebody else's link, arrives with the Dockerfile already in the
+// hash. Go straight to the build rather than showing an editor the reader did
+// not ask for and dropping what they were sent.
+const resumeFromURL = (): void => {
+  const hash = location.hash
+  if (!hash.includes(HASH_KEY_DOCKERFILE + '=')) return
+  const encoded = hash.match(new RegExp('(?:^#|&)' + HASH_KEY_DOCKERFILE + '=([^&]+)'))?.[1]
+  if (!encoded) return
+  try {
+    pasteBox.value = b64decodeUtf8(decodeURIComponent(encoded))
+  } catch {
+    return
+  }
+  updateEditor()
+  void startBuild(location.pathname + location.search + hash)
 }
 
 runBtn.addEventListener('click', run)
@@ -208,4 +257,12 @@ pasteBox.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') run()
 })
 
+// A running guest owns workers, a network stack and a terminal, and there is no
+// supported way to hand it back. Reloading is the honest way back to the editor,
+// and it also clears the Dockerfile out of the URL.
+buildBack?.addEventListener('click', () => {
+  location.assign(location.pathname)
+})
+
 selectDemoMode('shell')
+resumeFromURL()

@@ -42,7 +42,7 @@
           </div>
         </section>
 
-        <section class="workbench" aria-label="Dockerfile workbench">
+        <section id="workbench" class="workbench" aria-label="Dockerfile workbench">
           <div id="drop-zone" class="editor-pane">
             <div class="pane-bar">
               <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -99,6 +99,58 @@ CMD ["/bin/sh"]</textarea>
           </aside>
         </section>
 
+        <!--
+          The build happens here rather than on another page. It used to navigate
+          to /playground/, which threw away the guest download the editor had
+          already warmed and left the reader looking at a blank page while it
+          started again. The runtime script is imported on demand, so nothing
+          below costs anything until the button is pressed.
+        -->
+        <section id="build-stage" class="build-stage" aria-label="Build progress" hidden>
+          <div class="build-stage-head">
+            <div class="session-title">
+              <i aria-hidden="true"></i>
+              <span id="runtime-state" aria-live="polite">Preparing browser runtime</span>
+            </div>
+            <button id="build-back" type="button">Edit the Dockerfile</button>
+          </div>
+
+          <div class="build-stage-grid">
+            <aside id="build-view" class="build-view" aria-label="Build steps"></aside>
+
+            <section class="terminal-frame" aria-label="Container terminal">
+              <div class="terminal-toolbar">
+                <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <span>container-session / tty0</span>
+                <div class="runtime-progress" aria-hidden="true"><i id="runtime-progress"></i></div>
+              </div>
+              <section id="service-panel" class="service-panel" aria-label="FKN virtual HTTP service" hidden>
+                <div class="service-endpoint">
+                  <span>FKN virtual TCP</span>
+                  <strong id="service-endpoint">Binding in-process port</strong>
+                </div>
+                <div class="service-result">
+                  <span>Browser request</span>
+                  <output id="service-result">Waiting for the guest service</output>
+                </div>
+                <button id="service-probe" type="button" disabled>Run fetch again</button>
+              </section>
+              <div id="terminal"></div>
+            </section>
+          </div>
+
+          <section id="browser-console" class="browser-console" aria-label="Browser JavaScript console" hidden>
+            <div class="browser-console-toolbar">
+              <div><span>JS</span><strong>Browser console</strong></div>
+              <small id="browser-console-state" data-tone="waiting">Waiting</small>
+            </div>
+            <div id="browser-console-output" class="browser-console-output" role="log" aria-live="polite">
+              <div class="browser-console-line is-comment">
+                <span>//</span><code>Waiting for the Docker HTTP service.</code>
+              </div>
+            </div>
+          </section>
+        </section>
       </main>
 
       <footer>

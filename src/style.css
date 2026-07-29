@@ -534,6 +534,380 @@ main {
   display: none;
 }
 
+/* The build, in place of the editor, on the same page. */
+.build-stage {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0;
+}
+
+.build-stage[hidden] {
+  display: none;
+}
+
+.build-stage-head {
+  padding: 14px 26px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--paper-deep);
+}
+
+.build-stage-head .session-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.build-stage-head .session-title > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acid);
+  flex: none;
+  animation: build-pulse 1.6s ease-in-out infinite;
+}
+
+.build-stage-head .session-title[data-tone="error"] > i {
+  background: var(--orange);
+  animation: none;
+}
+
+@keyframes build-pulse {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .build-stage-head .session-title > i { animation: none; }
+}
+
+#build-back {
+  padding: 7px 13px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+}
+
+#build-back:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.build-stage-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.15fr);
+  align-items: stretch;
+}
+
+.build-view {
+  padding: 22px 26px;
+  border-right: 1px solid var(--line);
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.build-view-summary {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.build-view-summary[data-engine="chroot"]::before {
+  content: "Fast path";
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 6px;
+  background: var(--acid);
+  color: var(--ink);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.build-view-summary[data-engine="buildah"]::before {
+  content: "Compatibility";
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.build-view-transfer {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.build-view-track {
+  height: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.build-view-track > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--blue);
+  transition: width 120ms linear;
+}
+
+.build-view-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.build-view-steps > li {
+  padding: 9px 11px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 9px;
+  background: var(--white);
+  font-size: 11.5px;
+}
+
+.build-view-steps code {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgb(17 18 15 / 55%);
+}
+
+.build-view-steps em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.build-view-status::before {
+  content: "\00b7";
+  color: var(--line);
+}
+
+.build-view-steps > li.is-running {
+  background: var(--paper-deep);
+}
+
+.build-view-steps > li.is-running code {
+  color: var(--ink);
+}
+
+.build-view-steps > li.is-running .build-view-status::before {
+  content: "\25b8";
+  color: var(--blue);
+}
+
+.build-view-steps > li.is-done code {
+  color: var(--ink);
+}
+
+.build-view-steps > li.is-done .build-view-status::before {
+  content: "\2713";
+  color: #2f7d32;
+}
+
+.build-view-steps > li.is-failed .build-view-status::before {
+  content: "\00d7";
+  color: var(--orange);
+}
+
+.build-view-steps > li.is-skipped {
+  opacity: 0.5;
+}
+
+.build-view-footer {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.build-view-footer[data-tone="ok"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.build-view-footer[data-tone="error"] {
+  color: var(--orange);
+}
+
+/* The terminal keeps the dark treatment it has on the runtime page, scoped to
+   this panel rather than to the document, so the editor above it is unaffected. */
+.build-stage .terminal-frame {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: #090a08;
+}
+
+.build-stage .terminal-toolbar {
+  padding: 9px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #23251f;
+  color: #8c9084;
+  font-size: 11px;
+}
+
+.build-stage .terminal-dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.build-stage .terminal-dots > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #33362d;
+}
+
+.build-stage .runtime-progress {
+  margin-left: auto;
+  width: 90px;
+  height: 3px;
+  background: #23251f;
+  overflow: hidden;
+}
+
+.build-stage .runtime-progress > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--acid);
+  transition: width 200ms ease;
+}
+
+.build-stage #terminal {
+  min-height: 420px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.build-stage .service-panel {
+  padding: 12px 14px;
+  border-bottom: 1px solid #23251f;
+  display: grid;
+  gap: 8px;
+  color: #e8eadf;
+  font-size: 12px;
+}
+
+.build-stage .service-panel[hidden] {
+  display: none;
+}
+
+.build-stage .service-endpoint,
+.build-stage .service-result {
+  display: grid;
+  gap: 2px;
+}
+
+.build-stage .service-panel span {
+  color: #8c9084;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.build-stage #service-probe {
+  justify-self: start;
+  padding: 6px 11px;
+  border: 1px solid #353730;
+  background: transparent;
+  color: #e8eadf;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.browser-console {
+  border-top: 1px solid var(--line);
+  background: #090a08;
+  color: #e8eadf;
+}
+
+.browser-console[hidden] {
+  display: none;
+}
+
+.browser-console-toolbar {
+  padding: 9px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #23251f;
+  font-size: 11px;
+}
+
+.browser-console-output {
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.browser-console-line {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.browser-console-line > span {
+  color: #5f6358;
+}
+
+.browser-console-line code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.browser-console-line.is-error code {
+  color: var(--orange);
+}
+
+.browser-console-line.is-success code {
+  color: var(--acid);
+}
+
+@media (max-width: 900px) {
+  .build-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .build-view {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .build-stage #terminal {
+    min-height: 300px;
+  }
+}
+
 .underlay {
   min-height: 330px;
   padding: 46px;

@@ -18,6 +18,7 @@ import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion 
 import { BUILDERS, DEFAULT_BUILDER_ARCH, GUESTS, sameImage, type BuilderArch } from './builder'
 import { planBuild, type ChrootPlan } from './dockerfile'
 import { scanLayers, type LayerOps } from './layers'
+import { emitBuildEvent } from './build-events'
 import { chrootBuildScript, GATEWAY, type ImageDefaults, type LayerRef } from './build-script'
 import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
 
@@ -43,6 +44,7 @@ const setStage = (index: number, message: string, tone: 'normal' | 'error' = 'no
   }
   stage = index
   if (tone === 'error') failed = true
+  emitBuildEvent({ type: 'stage', index, message, tone })
   const state = document.getElementById('runtime-state')
   if (state) {
     state.textContent = message
@@ -110,6 +112,7 @@ class ConsoleTail {
       const sinceMs = Math.round(atMs - this.lastPhaseAt)
       this.phases.push({ label: match[1]!, atMs, sinceMs })
       this.lastPhaseAt = atMs
+      emitBuildEvent({ type: 'phase', label: match[1]!, atMs, sinceMs })
       console.info(
         '[phase] ' + match[1] + ': took ' + (sinceMs / 1000).toFixed(1) + 's' +
         ' (wall clock, ' + (atMs / 1000).toFixed(1) + 's from navigation)',
@@ -186,6 +189,22 @@ const main = async (): Promise<void> => {
   // can handle should never wait for it to arrive.
   const buildPlan = (preset || dockerfileText === null) ? null : planBuild(dockerfileText)
   const guest = GUESTS[buildPlan?.engine === 'chroot' ? 'runner' : 'builder'][builderArch]
+
+  if (buildPlan) {
+    const chroot = buildPlan.engine === 'chroot' ? buildPlan : null
+    emitBuildEvent({
+      type: 'plan',
+      engine: buildPlan.engine,
+      reason: buildPlan.engine === 'buildah'
+        ? buildPlan.reason
+        : 'Every instruction is one the fast path can run',
+      base: chroot?.base ?? null,
+      inPlace: chroot !== null && guest.baseImage !== undefined &&
+        sameImage(chroot.base, guest.baseImage),
+      guest: { kind: guest.kind, arch: guest.arch, downloadBytes: guest.approximateDownloadBytes },
+      steps: chroot?.steps.map((step) => ({ line: step.line, command: step.command })) ?? [],
+    })
+  }
 
   const servicePanel = document.getElementById('service-panel')
   const serviceEndpoint = document.getElementById('service-endpoint')
@@ -494,6 +513,14 @@ const runChrootBuild = async (context: {
     const rootfs: PulledRootfs = await pullRootfs(plan.base, {
       platform,
       onLog: (line) => console.log('[registry] ' + plan.base + ': ' + line),
+      onProgress: (progress) => emitBuildEvent({
+        type: 'pull',
+        ref: progress.ref,
+        bytesReceived: progress.bytesReceived,
+        bytesTotal: progress.bytesTotal,
+        layersDone: progress.layersDone,
+        layersTotal: progress.layersTotal,
+      }),
     }).catch((error: unknown) => {
       setStage(1, 'Image pull failed: ' + String(error), 'error')
       throw error
@@ -550,10 +577,16 @@ const runChrootBuild = async (context: {
   watch(() => tail.markers.buildOk || tail.markers.buildFailed, () => {
     if (tail.markers.buildFailed) {
       setStage(2, 'Dockerfile build failed', 'error')
+      emitBuildEvent({ type: 'finished', ok: false, message: 'The build failed inside the guest' })
       return
     }
     mark('image-built')
     setStage(3, serviceMode ? 'Starting service' : 'Container ready')
+    emitBuildEvent({
+      type: 'finished',
+      ok: true,
+      message: serviceMode ? 'Service starting' : 'Container ready',
+    })
     if (serviceMode) void sendRequest()
   })
 }
