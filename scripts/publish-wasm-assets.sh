@@ -4,7 +4,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
 bucket=fkn-container-assets
-asset_origin=https://container.fkn.app/wasm-assets
+# The app requests assets under a cache generation segment; read it from the
+# single place it is defined so the check follows the URL the browser uses.
+generation="$(sed -n "s/^export const ASSET_ROUTE_GENERATION = '\([^']*\)'.*/\1/p" "$here/../src/shared.ts")"
+[[ -n "$generation" ]] || { echo 'Could not read ASSET_ROUTE_GENERATION from src/shared.ts' >&2; exit 1; }
+asset_origin="https://container.fkn.app/wasm-assets/$generation"
 cache_control='public, max-age=31536000, immutable'
 # Brotli, not gzip: it takes the riscv64 demo image from 54 MB to 16 MB, and
 # every browser that can run the runtime at all negotiates it. Set
