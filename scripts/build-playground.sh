@@ -26,8 +26,11 @@ temporary="$(mktemp -d)"
 assets="$temporary/container2wasm"
 trap 'rm -rf "$temporary"' EXIT
 
+# Each target is <guest>:<arch>. `runner` is the fast path (busybox extracting a
+# rootfs and chrooting into it); `builder` carries buildah for Dockerfiles the
+# fast path cannot express.
 targets=("$@")
-[[ ${#targets[@]} -gt 0 ]] || targets=(riscv64 amd64)
+[[ ${#targets[@]} -gt 0 ]] || targets=(runner:riscv64 runner:amd64 builder:riscv64 builder:amd64)
 
 git clone --quiet --depth 1 --branch "$c2w_version" \
     https://github.com/container2wasm/container2wasm.git "$assets"
@@ -44,14 +47,21 @@ git -C "$assets" apply "$here/c2w-overlay-storage.patch"
 
 mkdir -p "$output_dir"
 
-for arch in "${targets[@]}"; do
-    case "$arch" in
-        riscv64) dockerfile="$context/builder-riscv64.Dockerfile"; out="$output_dir/playground-riscv64.wasm" ;;
-        amd64)   dockerfile="$context/Dockerfile";                 out="$output_dir/playground.wasm" ;;
-        *) echo "unknown target architecture: $arch" >&2; exit 1 ;;
+for target in "${targets[@]}"; do
+    # Bare `riscv64`/`amd64` still mean the builder, so existing invocations keep working.
+    guest="${target%%:*}"
+    arch="${target##*:}"
+    [[ "$target" == *:* ]] || { guest=builder; arch="$target"; }
+
+    case "$guest:$arch" in
+        runner:riscv64)  dockerfile="$context/runner.Dockerfile";          out="$output_dir/runner-riscv64.wasm" ;;
+        runner:amd64)    dockerfile="$context/runner.Dockerfile";          out="$output_dir/runner.wasm" ;;
+        builder:riscv64) dockerfile="$context/builder-riscv64.Dockerfile"; out="$output_dir/playground-riscv64.wasm" ;;
+        builder:amd64)   dockerfile="$context/Dockerfile";                 out="$output_dir/playground.wasm" ;;
+        *) echo "unknown target: $target (expected <runner|builder>:<riscv64|amd64>)" >&2; exit 1 ;;
     esac
 
-    image="c2w-playground-builder-$arch:$$"
+    image="c2w-playground-$guest-$arch:$$"
     echo "==> building $image from $(basename "$dockerfile")"
     docker build --pull --platform "linux/$arch" --file "$dockerfile" --tag "$image" "$context"
 
@@ -62,11 +72,18 @@ for arch in "${targets[@]}"; do
         exit 1
     }
 
+    # The builder needs 512 MB because buildah's chroot-isolation RUN spawns a
+    # subprocess that OOMs at the default 128. The runner has no such subprocess,
+    # but it does extract a whole base rootfs and then run the Dockerfile's RUN
+    # steps inside it, so give it headroom without paying the builder's.
+    memory=512
+    [[ "$guest" == runner ]] && memory=256
+
     echo "==> converting to $(basename "$out")"
     "$temporary/c2w" \
         --assets "$assets" \
         --target-arch "$arch" \
-        --build-arg VM_MEMORY_SIZE_MB=512 \
+        --build-arg VM_MEMORY_SIZE_MB="$memory" \
         "$image" "$out"
 
     docker image rm "$image" >/dev/null 2>&1 || true

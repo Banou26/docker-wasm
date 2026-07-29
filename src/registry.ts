@@ -332,7 +332,29 @@ const concat = (parts: Uint8Array[]): Uint8Array => {
   return out
 }
 
-export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Uint8Array> => {
+// Config fields the fast path applies itself, since it never builds an image for
+// anything else to read them from.
+export type ImageConfig = {
+  Env?: string[]
+  Cmd?: string[]
+  Entrypoint?: string[]
+  WorkingDir?: string
+}
+
+export type FetchedImage = {
+  configBytes: Uint8Array
+  configDigest: string
+  // Gzipped layer tars in application order.
+  layers: Array<{ digest: string; bytes: Uint8Array }>
+  registry: string
+  repository: string
+  tag: string
+}
+
+// Everything both callers need: the manifest walk and the blob fetches. What
+// they do with the result differs, and that difference is the whole point of the
+// fast path, so it does not belong in here.
+const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedImage> => {
   const onLog = opts.onLog || (() => {})
   const platform = opts.platform || { os: 'linux', arch: 'amd64' }
   const { registry, repository, tag, digest } = parseRef(ref)
@@ -356,10 +378,7 @@ export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Ui
   const configPromise = getBlobBytes(registry, repository, mj.config.digest)
   const configName = mj.config.digest.replace(/^sha256:/, '') + '.json'
 
-  // docker-archive layer dir = layer digest minus "sha256:".
-  // skopeo (which buildah uses to read docker-archive:) accepts gzipped layers.
   type BlobDescriptor = { digest: string; size: number }
-  type LayerEntry = { dir: string; file: string; bytes: Uint8Array }
   const layers = mj.layers as BlobDescriptor[]
   const bytesTotal = layers.reduce((sum, l) => sum + (l.size || 0), 0)
   let bytesReceived = 0
@@ -376,7 +395,7 @@ export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Ui
     })
   }
   report()
-  const layerEntriesPromise = mapConcurrent(layers, 3, async (l, i): Promise<LayerEntry> => {
+  const layerBytesPromise = mapConcurrent(layers, 3, async (l, i) => {
     onLog('fetch layer ' + (i + 1) + '/' + mj.layers.length + ' ' + l.digest + ' (' + Math.round(l.size / 1024) + ' KiB)')
     const bytes = await getBlobBytes(registry, repository, l.digest, (delta) => {
       bytesReceived += delta
@@ -384,11 +403,52 @@ export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Ui
     })
     layersDone++
     report()
-    return { dir: l.digest.replace(/^sha256:/, ''), file: 'layer.tar', bytes }
+    return { digest: l.digest, bytes }
   })
-  const [configBytes, layerEntries] = await Promise.all([configPromise, layerEntriesPromise])
+  const [configBytes, fetchedLayers] = await Promise.all([configPromise, layerBytesPromise])
+  return {
+    configBytes,
+    configDigest: mj.config.digest as string,
+    layers: fetchedLayers,
+    registry,
+    repository,
+    tag,
+  }
+}
 
-  // Step 3: assemble docker-archive tar.
+// The base image as the fast path wants it: layers to untar in order, plus the
+// config whose Env, WorkingDir, Cmd and Entrypoint the Dockerfile may override.
+export type PulledRootfs = { layers: Uint8Array[]; config: ImageConfig }
+
+export const pullRootfs = async (ref: string, opts: PullOptions = {}): Promise<PulledRootfs> => {
+  const image = await fetchImage(ref, opts)
+  let config: ImageConfig = {}
+  try {
+    config = (JSON.parse(new TextDecoder().decode(image.configBytes)).config ?? {}) as ImageConfig
+  } catch {
+    // A config we cannot read costs the image's own defaults, not the build:
+    // the Dockerfile's own CMD/ENV still apply.
+    opts.onLog?.('image config could not be parsed, continuing without its defaults')
+  }
+  opts.onLog?.('rootfs ready: ' + image.layers.length + ' layer(s)')
+  return { layers: image.layers.map((layer) => layer.bytes), config }
+}
+
+// The base image as buildah wants it: a docker-archive, the format `docker save`
+// writes and `buildah pull docker-archive:` reads.
+export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Uint8Array> => {
+  const onLog = opts.onLog || (() => {})
+  const { configBytes, configDigest, layers: fetchedLayers, registry, repository, tag } =
+    await fetchImage(ref, opts)
+  const configName = configDigest.replace(/^sha256:/, '') + '.json'
+  // docker-archive layer dir = layer digest minus "sha256:".
+  // skopeo (which buildah uses to read docker-archive:) accepts gzipped layers.
+  const layerEntries = fetchedLayers.map((layer) => ({
+    dir: layer.digest.replace(/^sha256:/, ''),
+    file: 'layer.tar',
+    bytes: layer.bytes,
+  }))
+
   const parts: Uint8Array[] = []
   parts.push(...tarFile(configName, configBytes))
   for (const e of layerEntries) {
