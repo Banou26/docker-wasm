@@ -52,11 +52,22 @@ export const preloadContainer = async (image: string | URL): Promise<void> => {
 // SharedArrayBuffer, and therefore the whole runtime, needs the document to be
 // cross-origin isolated. Call this to turn a confusing downstream failure into
 // a clear one.
+//
+// The two ways this fails look identical from the outside but have completely
+// different fixes, so they are reported separately. Headers missing is the
+// server's problem. Headers present but isolation still off is the visitor's
+// browser: an extension rewriting response headers, or a disabled preference.
 export const assertCrossOriginIsolated = (): void => {
   if (globalThis.crossOriginIsolated) return
-  throw new Error(
-    'This page is not cross-origin isolated, so SharedArrayBuffer is unavailable. ' +
-    'Serve it with "Cross-Origin-Opener-Policy: same-origin" and ' +
-    '"Cross-Origin-Embedder-Policy: require-corp" (or "credentialless").',
-  )
+
+  const sabMissing = typeof SharedArrayBuffer === 'undefined'
+  const detail = sabMissing
+    ? 'Serve this page with "Cross-Origin-Opener-Policy: same-origin" and ' +
+      '"Cross-Origin-Embedder-Policy: credentialless" (or "require-corp").'
+    : 'SharedArrayBuffer exists but the document is not isolated, so the headers are ' +
+      'probably being sent and then altered. Check for a browser extension that rewrites ' +
+      'response headers, and for a disabled cross-origin isolation preference. ' +
+      'A clean browser profile is the quickest way to tell the two apart.'
+
+  throw new Error('This page is not cross-origin isolated. ' + detail)
 }
