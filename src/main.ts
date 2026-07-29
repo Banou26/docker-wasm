@@ -106,12 +106,13 @@ class ConsoleTail {
   private recordPhases (chunk: string): void {
     for (const match of chunk.matchAll(/== (.+?) \+\d+s ==/g)) {
       const atMs = Math.round(performance.now())
-      this.phases.push({
-        label: match[1]!,
-        atMs,
-        sinceMs: Math.round(atMs - this.lastPhaseAt),
-      })
+      const sinceMs = Math.round(atMs - this.lastPhaseAt)
+      this.phases.push({ label: match[1]!, atMs, sinceMs })
       this.lastPhaseAt = atMs
+      console.info(
+        '[phase] ' + match[1] + ' — took ' + (sinceMs / 1000).toFixed(1) + 's' +
+        ' (wall clock, ' + (atMs / 1000).toFixed(1) + 's from navigation)',
+      )
     }
   }
 

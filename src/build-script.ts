@@ -92,14 +92,22 @@ export const chrootBuildScript = (options: ChrootScriptOptions): string => {
 
   layers.forEach((layer, index) => {
     const label = 'layer ' + (index + 1) + '/' + layers.length
-    parts.push('__phase ' + shellQuote('fetch ' + label + ' (' + layer.bytes + " bytes)") + '\n')
-    // Straight into tar: the layer never lands on the guest's own filesystem, so
-    // this costs one pass instead of a write, a read and a delete.
+    // Fetch and extract are deliberately separate rather than piped. Piping is
+    // one pass fewer, but it merges the two costs into a single unsplittable
+    // number, and they have completely different fixes: a slow bridge is a
+    // networking problem, a slow gunzip is an emulation problem. Measure first.
+    const tmp = '/tmp/layer' + index + '.tar.gz'
+    parts.push('__phase ' + shellQuote('fetch ' + label + ' (' + layer.bytes + ' bytes)') + '\n')
     parts.push(
-      "wget -q -O - 'http://" + GATEWAY + '/img/' + encodeURIComponent(layer.key) + "'" +
-      ' | tar -xz -C ' + ROOTFS + ' 2>/dev/null' +
+      "wget -q -O " + tmp + " 'http://" + GATEWAY + '/img/' + encodeURIComponent(layer.key) + "'" +
       ' || { echo ' + failMarker + '; exit 1; }\n',
     )
+    parts.push('__phase ' + shellQuote('extract ' + label) + '\n')
+    parts.push(
+      'tar -xzf ' + tmp + ' -C ' + ROOTFS +
+      ' || { echo ' + failMarker + '; exit 1; }\n',
+    )
+    parts.push('rm -f ' + tmp + '\n')
   })
 
   if (layers.length > 1) parts.push(applyWhiteouts)
