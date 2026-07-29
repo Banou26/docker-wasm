@@ -46,7 +46,8 @@
     "copy-wasm": "copyfiles -u 1 dist/*.wasm public/ && copyfiles -u 1 dist/*.wasm build/",
     "compress-wasm": "node scripts/compress-wasm.cjs",
     "publish-wasm-assets": "./scripts/publish-wasm-assets.sh",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check-fast-path": "./scripts/check-fast-path.sh"
   },
   "keywords": [
     "docker",

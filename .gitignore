@@ -29,3 +29,4 @@ src/app/dockerfile-playground/alpine.tar
 .DS_Store
 *.swp
 *.swo
+test/fast-path/generated-*.sh
