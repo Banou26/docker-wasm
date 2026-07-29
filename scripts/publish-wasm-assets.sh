@@ -24,7 +24,8 @@ wrangler="$repo/node_modules/.bin/wrangler"
 
 # One target per run. Publishing several would interleave manifest rewrites.
 if [[ $# -ne 1 ]]; then
-    echo 'Usage: npm run publish-wasm-assets -- playground|proxy|presets|all' >&2
+    echo 'Usage: npm run publish-wasm-assets -- <target>' >&2
+    echo 'Targets: playground, runner, runner-riscv64, playground-riscv64, proxy, presets, all' >&2
     echo 'Exactly one target per run.' >&2
     exit 2
 fi
@@ -32,6 +33,18 @@ fi
 case "${1:-}" in
 playground)
     assets=('playground|/playground/playground.wasm|public/playground/playground.wasm|playground/playground|.wasm.js|application/wasm')
+    ;;
+runner)
+    # The fast path's guest: busybox and nothing else, so a third of the builder's
+    # download and a far quicker boot. The page selects it from the build plan, so
+    # it has to be published before that selection can reach production.
+    assets=('runner|/playground/runner.wasm|public/playground/runner.wasm|playground/runner|.wasm.js|application/wasm')
+    ;;
+runner-riscv64)
+    assets=('runner-riscv64|/playground/runner-riscv64.wasm|public/playground/runner-riscv64.wasm|playground/runner-riscv64|.wasm.js|application/wasm')
+    ;;
+playground-riscv64)
+    assets=('playground-riscv64|/playground/playground-riscv64.wasm|public/playground/playground-riscv64.wasm|playground/playground-riscv64|.wasm.js|application/wasm')
     ;;
 proxy)
     assets=('proxy|/c2w-webvpn-proxy.wasm|public/c2w-webvpn-proxy.wasm|c2w-webvpn-proxy|.wasm.js|application/wasm')
@@ -45,13 +58,15 @@ presets)
 all)
     assets=(
         'playground|/playground/playground.wasm|public/playground/playground.wasm|playground/playground|.wasm.js|application/wasm'
+        'runner|/playground/runner.wasm|public/playground/runner.wasm|playground/runner|.wasm.js|application/wasm'
         'proxy|/c2w-webvpn-proxy.wasm|public/c2w-webvpn-proxy.wasm|c2w-webvpn-proxy|.wasm.js|application/wasm'
         'preset-shell|/presets/shell.wasm|public/presets/shell.wasm|presets/shell|.wasm.js|application/wasm'
         'preset-http|/presets/http.wasm|public/presets/http.wasm|presets/http|.wasm.js|application/wasm'
     )
     ;;
 *)
-    echo 'Usage: npm run publish-wasm-assets -- playground|proxy|presets|all' >&2
+    echo 'Usage: npm run publish-wasm-assets -- <target>' >&2
+    echo 'Targets: playground, runner, runner-riscv64, playground-riscv64, proxy, presets, all' >&2
     exit 2
     ;;
 esac
