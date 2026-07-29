@@ -11,8 +11,20 @@ import { fetch as cloudFetch } from '@fkn/lib/cloud'
 
 export type Platform = { os: string; arch: string }
 
+// Layer sizes come from the manifest, so a pull knows its exact total before it
+// starts and progress is real rather than a spinner.
+export type PullProgress = {
+  ref: string
+  // Layers whose bytes have fully arrived.
+  layersDone: number
+  layersTotal: number
+  bytesReceived: number
+  bytesTotal: number
+}
+
 export type PullOptions = {
   onLog?: (s: string) => void
+  onProgress?: (progress: PullProgress) => void
   platform?: Platform
 }
 
@@ -202,12 +214,62 @@ const pickPlatform = (index: string, want: Platform): ManifestEntry | null => {
     || null
 }
 
-const getBlobBytes = async (registry: string, repository: string, digest: string): Promise<Uint8Array> => {
+// The platforms a reference publishes. Manifest list only, so it is one small
+// request and cheap enough to run while someone is still typing. A single-platform
+// image reports the one it is, read from its config.
+export const manifestPlatforms = async (ref: string): Promise<Platform[]> => {
+  const { registry, repository, tag, digest } = parseRef(ref)
+  const m = await getManifest(registry, repository, digest || tag)
+  const isList = m.type.includes('manifest.list') || m.type.includes('image.index')
+  const parsed = JSON.parse(m.body)
+
+  if (isList) {
+    if (!Array.isArray(parsed.manifests)) return []
+    return parsed.manifests
+      .filter((entry: ManifestEntry) => entry.platform)
+      // Attestation manifests ride along in the same list with a placeholder
+      // architecture; they are not something anything can run.
+      .filter((entry: ManifestEntry) => entry.platform.architecture !== 'unknown')
+      .map((entry: ManifestEntry) => ({ os: entry.platform.os, arch: entry.platform.architecture }))
+  }
+
+  if (!parsed.config?.digest) return []
+  const config = JSON.parse(new TextDecoder().decode(
+    await getBlobBytes(registry, repository, parsed.config.digest),
+  ))
+  return config.architecture ? [{ os: config.os || 'linux', arch: config.architecture }] : []
+}
+
+const getBlobBytes = async (
+  registry: string,
+  repository: string,
+  digest: string,
+  onBytes?: (delta: number) => void,
+): Promise<Uint8Array> => {
   const url = 'https://' + registry + '/v2/' + repository + '/blobs/' + digest
   const r = await getWithAuth(url, repository)
   if (r.status !== 200) throw new Error('blob ' + digest + ' -> ' + r.status)
-  const ab = await r.body.arrayBuffer()
-  return new Uint8Array(ab)
+  // Without a progress callback there is nothing to gain from streaming, and
+  // arrayBuffer() is the faster path.
+  if (!onBytes || !r.body.body) {
+    const ab = await r.body.arrayBuffer()
+    return new Uint8Array(ab)
+  }
+
+  const reader = r.body.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    total += value.length
+    onBytes(value.length)
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length }
+  return out
 }
 
 const mapConcurrent = async <T, R>(
@@ -299,9 +361,29 @@ export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Ui
   type BlobDescriptor = { digest: string; size: number }
   type LayerEntry = { dir: string; file: string; bytes: Uint8Array }
   const layers = mj.layers as BlobDescriptor[]
+  const bytesTotal = layers.reduce((sum, l) => sum + (l.size || 0), 0)
+  let bytesReceived = 0
+  let layersDone = 0
+  const report = (): void => {
+    opts.onProgress?.({
+      ref,
+      layersDone,
+      layersTotal: layers.length,
+      // Concurrent layers can overshoot the manifest total slightly if a registry
+      // reports a stale size; clamp so a progress bar never runs past its end.
+      bytesReceived: Math.min(bytesReceived, bytesTotal),
+      bytesTotal,
+    })
+  }
+  report()
   const layerEntriesPromise = mapConcurrent(layers, 3, async (l, i): Promise<LayerEntry> => {
     onLog('fetch layer ' + (i + 1) + '/' + mj.layers.length + ' ' + l.digest + ' (' + Math.round(l.size / 1024) + ' KiB)')
-    const bytes = await getBlobBytes(registry, repository, l.digest)
+    const bytes = await getBlobBytes(registry, repository, l.digest, (delta) => {
+      bytesReceived += delta
+      report()
+    })
+    layersDone++
+    report()
     return { dir: l.digest.replace(/^sha256:/, ''), file: 'layer.tar', bytes }
   })
   const [configBytes, layerEntries] = await Promise.all([configPromise, layerEntriesPromise])

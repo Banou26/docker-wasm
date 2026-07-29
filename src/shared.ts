@@ -43,6 +43,9 @@ export const QUERY_PARAMS = {
   wasm: 'wasm',
   publish: 'publish',
   run: 'run',
+  // Builder guest architecture, which also decides the platform the page pulls
+  // base images for: layers handed to the guest have to be executable inside it.
+  arch: 'arch',
 } as const
 
 export type NetMode = 'delegate' | 'browser' | 'webvpn'

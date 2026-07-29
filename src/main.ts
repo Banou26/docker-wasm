@@ -15,6 +15,7 @@ import { init, Terminal, FitAddon } from 'ghostty-web'
 import { createContainer, type ArtifactCache, type Container } from './lib'
 import { pullImage, dockerfileFromRefs } from './registry'
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
+import { BUILDERS, DEFAULT_BUILDER_ARCH, type BuilderArch } from './builder'
 import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
 
 const timings: Record<string, number> = {}
@@ -77,12 +78,18 @@ const ANSI = /\u001B(?:\[[0-9;?]*[ -/]*[@-~]|[()][A-Za-z0-9]|\][^\u0007\u001B]*(
 class ConsoleTail {
   private text = ''
   private decoder = new TextDecoder()
+  // The rendered terminal is a canvas, so the plain-text tail is the only thing
+  // the page (or a test driving it) can actually read back.
   readonly markers = {
     buildOk: false,
     buildFailed: false,
     runFailed: false,
     serviceReady: false,
     serviceFailed: false,
+  }
+
+  read (): string {
+    return this.text
   }
 
   push (bytes: Uint8Array): void {
@@ -108,8 +115,16 @@ class ConsoleTail {
 
 type BrowserConsoleTone = 'command' | 'comment' | 'route' | 'header' | 'success' | 'body' | 'error'
 
+// Which builder guest this page was pointed at. Also decides the platform base
+// images are pulled for: buildah executes RUN steps inside the guest, so an
+// amd64 rootfs in a riscv64 guest fails at the first instruction.
+let builderArch: BuilderArch = DEFAULT_BUILDER_ARCH
+
 const main = async (): Promise<void> => {
   const query = new URLSearchParams(location.search)
+  const requestedArch = query.get(QUERY_PARAMS.arch)
+  if (requestedArch === 'riscv64' || requestedArch === 'amd64') builderArch = requestedArch
+  else if (requestedArch) throw new Error('arch must be riscv64 or amd64 when provided')
   const publishSpec = getPublishSpec(query)
   const runParam = query.get(QUERY_PARAMS.run)
   if (runParam !== null && runParam !== 'default') {
@@ -214,7 +229,7 @@ const main = async (): Promise<void> => {
           // A preset URL without a matching Dockerfile means the source was
           // edited, so fall back to the builder guest.
           return isPresetWasmURL(requested)
-            ? resolveAsset('/playground/playground.wasm')
+            ? resolveAsset(BUILDERS[builderArch].wasmPath)
             : new URL(requested, location.href).toString()
         }
         if (legacyId) return new URL('/wasm/' + legacyId + '/out.wasm', location.href).toString()
@@ -224,6 +239,9 @@ const main = async (): Promise<void> => {
   // The builder guest fetches base images and its generated script from here.
   const artifacts: ArtifactCache = new Map()
   const tail = new ConsoleTail()
+  // Readable from the page for diagnostics: the terminal itself renders to a
+  // canvas, so without this there is no way to see what the guest last said.
+  ;(window as typeof window & { dockerWasmConsole?: () => string }).dockerWasmConsole = () => tail.read()
 
   setStage(0, 'Booting Linux guest')
   const container = createContainer({
@@ -430,7 +448,10 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
     const entry: { promise: Promise<Uint8Array> | null; bytes: Uint8Array | null } =
       { promise: null, bytes: null }
     artifacts.set(ref, entry)
-    entry.promise = pullImage(ref, { onLog: (line) => console.log('[registry] ' + ref + ': ' + line) })
+    entry.promise = pullImage(ref, {
+      platform: BUILDERS[builderArch].platform,
+      onLog: (line) => console.log('[registry] ' + ref + ': ' + line),
+    })
       .then((bytes) => { entry.bytes = bytes; return bytes })
     entry.promise.then(() => {
       readyRefs++
@@ -455,23 +476,40 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
   for (const ref of refs) {
     const encoded = encodeURIComponent(ref)
     const safe = ref.replace(/[^A-Za-z0-9._-]/g, '_')
+    // Each phase announces itself. Without this the guest is silent from the
+    // moment the script starts until buildah prints its first step, which is
+    // minutes of a progress view having nothing to say and no way to tell a slow
+    // transfer from a hung one.
     loadBlock +=
-      'echo "== pull ' + ref + ' =="\n' +
+      '__phase "fetch ' + ref + '"\n' +
       "wget -q 'http://192.168.127.1:9090/img/" + encoded + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
+      '__phase "fetched ' + ref + ' $(/bin/busybox wc -c < /tmp/' + safe + '.tar) bytes"\n' +
       'buildah pull docker-archive:/tmp/' + safe + '.tar\n' +
+      '__phase "loaded ' + ref + '"\n' +
       'rm -f /tmp/' + safe + '.tar\n'
   }
 
+  // Every phase marker carries seconds since the script started. The page parses
+  // these into the progress view, and they are also the only way to see which
+  // part of a slow build is actually slow: the guest is otherwise silent for
+  // minutes at a stretch and one long pause looks like any other.
+  // The build runs in a `sh -eu` heredoc, so its shell functions do not exist in
+  // the outer script. Both define __phase; only the outer one sets the clock, and
+  // exports it so the inner one continues the same timeline rather than restarting.
+  const phaseHelper =
+    '__phase() { echo "== $1 +$(( $(date +%s) - ${__t0:-0} ))s =="; }\n'
+
   const buildCommands =
+    phaseHelper +
     'mkdir -p /work /var/lib/containers/storage /run/containers/storage /etc/containers && cd /work\n' +
     "printf 'nameserver 192.168.127.1\\n' > /etc/resolv.conf\n" +
     "printf '" + storageConf + "' > /etc/containers/storage.conf\n" +
     loadBlock +
     "echo '" + padded + "' | base64 -d > Dockerfile\n" +
-    'echo == buildah build ==\n' +
+    '__phase "buildah build"\n' +
     'buildah bud' + (reuseBuildContainer ? ' --layers --rm=false' : '') +
     ' --isolation chroot --network host --pull=never -t userimg .\n' +
-    'echo == build complete ==\n'
+    '__phase "build complete"\n'
 
   const defaultCommandSetup = serviceMode
     ? 'cmdfile=/tmp/fkn-image-command\n' +
@@ -525,11 +563,14 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
       '  fi\n'
 
   const script =
+    '__t0=$(date +%s)\n' +
+    'export __t0\n' +
+    phaseHelper +
     "if sh -eu <<'FKN_BUILD'\n" + buildCommands +
     'FKN_BUILD\n' +
     'then\n' +
     '  echo __FKN_BUILD_"OK"__\n' +
-    '  echo == running container ==\n' +
+    '  __phase "running container"\n' +
     '  target_image=userimg\n' +
     defaultCommandSetup +
     launch +
