@@ -14,32 +14,61 @@ import { manifestPlatforms, dockerfileFromRefs } from './registry'
 
 export type BuilderArch = 'riscv64' | 'amd64'
 
+// Which guest, independent of architecture.
+//
+// `runner` is bare alpine: busybox has the wget, tar and chroot the fast path
+// needs, and nothing else. `builder` additionally carries buildah, for
+// Dockerfiles the fast path cannot express. The difference is not marginal:
+// carrying buildah roughly triples the download and moves the boot from a
+// TinyEMU-class ~1.2s to a Bochs-class ~8s.
+export type GuestKind = 'runner' | 'builder'
+
 export type Builder = {
   arch: BuilderArch
+  kind: GuestKind
   // Path to the converted guest, before asset versioning.
   wasmPath: string
   // Platform the page must pull base images for, so the layers it hands the
   // guest are executable inside it.
   platform: { os: string; arch: string }
-  // Roughly what the visitor is about to download, for the status view. Measured
-  // from the brotli-compressed artifacts rather than guessed.
+  // Brotli-compressed size, measured rather than guessed, so the status view can
+  // show a real total before the first byte arrives.
   approximateDownloadBytes: number
 }
 
-export const BUILDERS: Record<BuilderArch, Builder> = {
-  riscv64: {
-    arch: 'riscv64',
-    wasmPath: '/playground/playground-riscv64.wasm',
-    platform: { os: 'linux', arch: 'riscv64' },
-    approximateDownloadBytes: 35_600_000,
+export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
+  runner: {
+    riscv64: {
+      arch: 'riscv64', kind: 'runner',
+      wasmPath: '/playground/runner-riscv64.wasm',
+      platform: { os: 'linux', arch: 'riscv64' },
+      approximateDownloadBytes: 15_400_000,
+    },
+    amd64: {
+      arch: 'amd64', kind: 'runner',
+      wasmPath: '/playground/runner.wasm',
+      platform: { os: 'linux', arch: 'amd64' },
+      approximateDownloadBytes: 30_900_000,
+    },
   },
-  amd64: {
-    arch: 'amd64',
-    wasmPath: '/playground/playground.wasm',
-    platform: { os: 'linux', arch: 'amd64' },
-    approximateDownloadBytes: 48_900_000,
+  builder: {
+    riscv64: {
+      arch: 'riscv64', kind: 'builder',
+      wasmPath: '/playground/playground-riscv64.wasm',
+      platform: { os: 'linux', arch: 'riscv64' },
+      approximateDownloadBytes: 37_900_000,
+    },
+    amd64: {
+      arch: 'amd64', kind: 'builder',
+      wasmPath: '/playground/playground.wasm',
+      platform: { os: 'linux', arch: 'amd64' },
+      approximateDownloadBytes: 48_900_000,
+    },
   },
 }
+
+// Kept for the existing buildah call sites; the fast path goes through GUESTS.
+export const BUILDERS: Record<BuilderArch, Builder> = GUESTS.builder
 
 // amd64 until the riscv64 guest's inbound fetch from the artifact bridge is
 // fixed: it boots in 7.8s and is a third smaller, but `wget` of the base image

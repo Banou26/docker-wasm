@@ -13,9 +13,11 @@
 import { init, Terminal, FitAddon } from 'ghostty-web'
 
 import { createContainer, type ArtifactCache, type Container } from './lib'
-import { pullImage, dockerfileFromRefs } from './registry'
+import { pullImage, pullRootfs, dockerfileFromRefs } from './registry'
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
-import { BUILDERS, DEFAULT_BUILDER_ARCH, type BuilderArch } from './builder'
+import { BUILDERS, DEFAULT_BUILDER_ARCH, GUESTS, type BuilderArch } from './builder'
+import { planBuild, type ChrootPlan } from './dockerfile'
+import { chrootBuildScript, GATEWAY } from './build-script'
 import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
 
 const timings: Record<string, number> = {}
@@ -154,6 +156,13 @@ const main = async (): Promise<void> => {
     ? null
     : matchPreset(dockerfileText, publishSpec?.guestPort ?? null)
 
+  // Which engine builds this, and therefore which guest has to boot. Deciding
+  // here rather than after boot is the point: buildah's guest is three times the
+  // download and boots roughly six times slower, so a Dockerfile the fast path
+  // can handle should never wait for it to arrive.
+  const buildPlan = (preset || dockerfileText === null) ? null : planBuild(dockerfileText)
+  const guest = GUESTS[buildPlan?.engine === 'chroot' ? 'runner' : 'builder'][builderArch]
+
   const servicePanel = document.getElementById('service-panel')
   const serviceEndpoint = document.getElementById('service-endpoint')
   const serviceResult = document.getElementById('service-result') as HTMLOutputElement | null
@@ -226,13 +235,19 @@ const main = async (): Promise<void> => {
         const requested = query.get(QUERY_PARAMS.wasmUrl)
         const legacyId = query.get(QUERY_PARAMS.wasm)
         if (requested) {
-          // A preset URL without a matching Dockerfile means the source was
-          // edited, so fall back to the builder guest.
+          // A preset URL with an edited Dockerfile means the source no longer
+          // matches the dedicated runtime, so fall through to whichever guest
+          // the plan chose rather than booting a runtime for the wrong image.
+          // Any other explicit URL is honoured, which is how a specific artifact
+          // gets tested.
           return isPresetWasmURL(requested)
-            ? resolveAsset(BUILDERS[builderArch].wasmPath)
+            ? resolveAsset(guest.wasmPath)
             : new URL(requested, location.href).toString()
         }
         if (legacyId) return new URL('/wasm/' + legacyId + '/out.wasm', location.href).toString()
+        // A Dockerfile with no explicit artifact: the plan already decided which
+        // guest can build it, and that is the one to boot.
+        if (buildPlan) return resolveAsset(guest.wasmPath)
         return resolveAsset('/out.wasm')
       })()
 
@@ -376,6 +391,14 @@ const main = async (): Promise<void> => {
     return
   }
 
+  if (buildPlan?.engine === 'chroot') {
+    await runChrootBuild({
+      container, artifacts, tail, plan: buildPlan, platform: guest.platform,
+      publishSpec, serviceMode, setConsoleState, writeConsole, sendRequest, watch,
+    })
+    return
+  }
+
   await runBuilder({
     container,
     artifacts,
@@ -391,6 +414,79 @@ const main = async (): Promise<void> => {
     writeConsole,
     sendRequest,
     watch,
+  })
+}
+
+// Builds without buildah: the page pulls the base image's layers, offers them
+// over the same gateway the builder used for its docker-archive, and the guest
+// untars them and chroots in. That removes the two phases that dominated the old
+// path (55s loading the archive into buildah's store, 33s committing a layer),
+// neither of which produced anything this page consumed.
+const runChrootBuild = async (context: {
+  container: Container
+  artifacts: ArtifactCache
+  tail: ConsoleTail
+  plan: ChrootPlan
+  platform: { os: string; arch: string }
+  publishSpec: PublishSpec | null
+  serviceMode: boolean
+  setConsoleState: (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error') => void
+  writeConsole: (prompt: string, message: string, tone: BrowserConsoleTone) => void
+  sendRequest: () => Promise<void>
+  watch: (check: () => boolean, onHit: () => void, intervalMs?: number) => void
+}): Promise<void> => {
+  const { container, artifacts, tail, plan, platform, serviceMode, watch, sendRequest } = context
+
+  setStage(1, 'Pulling ' + plan.base)
+  const rootfs = await pullRootfs(plan.base, {
+    platform,
+    onLog: (line) => console.log('[registry] ' + plan.base + ': ' + line),
+  }).catch((error: unknown) => {
+    setStage(1, 'Image pull failed: ' + String(error), 'error')
+    throw error
+  })
+  mark('base-images-ready')
+
+  // Each layer becomes its own artifact key so the guest can stream them one at
+  // a time straight into tar, rather than materialising a combined archive on
+  // either side.
+  const layers = rootfs.layers.map((bytes, index) => {
+    const key = '__fkn_layer_' + index + '__'
+    artifacts.set(key, { promise: null, bytes })
+    return { key, bytes: bytes.length }
+  })
+
+  setStage(2, 'Building in Linux')
+  const script = chrootBuildScript({
+    plan,
+    layers,
+    imageDefaults: { entrypoint: rootfs.config.Entrypoint, cmd: rootfs.config.Cmd },
+    readyMarker: '__FKN_BUILD_' + 'OK__',
+    failMarker: '__FKN_BUILD_' + 'FAILED__',
+  })
+
+  const scriptRef = '__fkn_runtime_build_script__'
+  artifacts.set(scriptRef, { promise: null, bytes: new TextEncoder().encode(script) })
+
+  // Wait for a prompt before typing, the same as the buildah path: the guest is
+  // not listening until its shell is.
+  watch(() => tail.atPrompt(), () => {
+    mark('guest-shell-ready')
+    container.write(
+      "wget -q -O /tmp/fkn-build.sh 'http://" + GATEWAY + '/img/' + encodeURIComponent(scriptRef) +
+      "' && sh /tmp/fkn-build.sh\n",
+    )
+    mark('build-script-sent')
+  })
+
+  watch(() => tail.markers.buildOk || tail.markers.buildFailed, () => {
+    if (tail.markers.buildFailed) {
+      setStage(2, 'Dockerfile build failed', 'error')
+      return
+    }
+    mark('image-built')
+    setStage(3, serviceMode ? 'Starting service' : 'Container ready')
+    if (serviceMode) void sendRequest()
   })
 }
 
