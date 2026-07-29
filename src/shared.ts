@@ -5,6 +5,14 @@
 declare const __WASM_ASSET_VERSIONS__: Record<string, string>
 declare const __WASM_ASSET_BASE__: string
 
+// Asset responses are stamped immutable for a year, so one request made before
+// the Pages Function could serve the object pins a broken response at that edge
+// location until somebody purges it. Bumping this segment moves every artifact
+// to a URL nothing has cached, which is a deploy rather than a dashboard action
+// and needs no cache-purge credential. Bump it when the served bytes are wrong
+// but the R2 objects are right.
+export const ASSET_ROUTE_GENERATION = 'g2'
+
 export const withWasmAssetVersion = (url: string): string => {
   const path = url.split('?', 1)[0]!
   const version = __WASM_ASSET_VERSIONS__[path] || 'dev'
@@ -13,7 +21,7 @@ export const withWasmAssetVersion = (url: string): string => {
     const versionedPath = path.endsWith('.wasm')
       ? path.slice(0, -5) + '.' + version + '.wasm.js'
       : path + '.' + version
-    return __WASM_ASSET_BASE__ + versionedPath + suffix
+    return __WASM_ASSET_BASE__ + '/' + ASSET_ROUTE_GENERATION + versionedPath + suffix
   }
   const separator = url.includes('?') ? '&' : '?'
   return url + separator + 'v=' + encodeURIComponent(version)

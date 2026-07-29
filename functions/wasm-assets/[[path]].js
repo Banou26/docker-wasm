@@ -37,7 +37,12 @@ export async function onRequest (context) {
     })
   }
 
-  const key = Array.isArray(params.path) ? params.path.join('/') : params.path
+  const requested = Array.isArray(params.path) ? params.path.join('/') : params.path
+  // A leading generation segment only changes the public URL. It exists to
+  // sidestep an edge cache holding a response from before this Function could
+  // serve the object, and is stripped before the R2 lookup so the stored keys
+  // never move.
+  const key = typeof requested === 'string' ? requested.replace(/^g[0-9]+\//, '') : requested
   const rule = typeof key === 'string'
     ? objectRules.find(({ pattern }) => pattern.test(key))
     : undefined
