@@ -226,17 +226,27 @@ What the numbers depend on, roughly in order:
    roughly 170 ms per request under emulation; a persistent process that accepts
    in a loop is far cheaper. The runtime keeps connections alive and pools them
    when the server allows it.
-5. **`preloadContainer`.** Moving the download before the click removes it from
-   the perceived startup time.
+5. **`preloadContainer`.** Useful on a genuine first visit, where it moves the
+   transfer earlier. It does **not** help once the artifact is in the HTTP
+   cache: measured on the demo image, an 8 second preload changed
+   click-to-serving by nothing, because at that point the cost is compilation
+   rather than transfer, and discarding the preloaded module does not carry the
+   compiled code over.
 
 Measured on the demo image, riscv64, localhost:
 
 | | |
 | --- | --- |
-| Download plus streaming compile | 3.0 s |
-| First HTTP response after the call | 4.3 s |
-| Steady-state request latency | 166 to 186 ms, median 170 ms |
+| Fetch plus compile of the 54 MB module | 2.0 to 2.6 s, compile-dominated |
+| Guest boot: snapshot restore until the service answers | 1.23 to 1.25 s, very stable |
+| Click to first HTTP response | 3.2 to 3.9 s |
+| Steady-state request latency | 162 to 186 ms, median 170 ms |
 | Throughput of a download run inside the guest | around 197 KB/s |
+
+With the artifact already in the HTTP cache the transfer is free (`transferSize`
+0, 149 ms), so the 2 to 2.6 s before the guest starts is almost entirely
+WebAssembly compilation. That is the number to attack for a faster start, not
+the download.
 
 The guest itself copies memory at about 1.2 MB/s under emulation, which is the
 ceiling everything else sits under.
