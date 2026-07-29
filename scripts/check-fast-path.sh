@@ -28,8 +28,17 @@ cat > "$out/entry.ts" <<EOF
 export * from '$root/src/dockerfile'
 export * from '$root/src/build-script'
 export * from '$root/src/layers'
+export * from '$root/src/launch'
+export { isPresetWasmURL, PRESET_DOCKERFILES } from '$root/src/presets'
 EOF
+# The asset version map is injected by vite at build time; outside it, an
+# unversioned URL is exactly what the checks want to read.
+# The preset Dockerfiles are `?raw` imports, which vite resolves and esbuild
+# does not, so they get a loader here rather than a stub: their exact text is
+# what decides whether a source is a preset at all.
 npx --no-install esbuild --bundle --format=esm --platform=node --log-level=warning \
+  --define:__WASM_ASSET_VERSIONS__='{}' --define:__WASM_ASSET_BASE__='""' \
+  --loader:.Dockerfile=text \
   --outfile="$out/fastpath.mjs" "$out/entry.ts"
 cp "$root"/test/fast-path/*.mjs "$out/"
 

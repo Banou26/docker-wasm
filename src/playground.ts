@@ -1,4 +1,4 @@
-import { b64encodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
+import { withWasmAssetVersion } from './shared'
 import {
   matchPreset,
   PRESET_DOCKERFILES,
@@ -6,12 +6,15 @@ import {
   PRESET_WASM_PATHS,
   type PresetName,
 } from './presets'
+import { planLaunch, type LaunchPlan } from './launch'
+import type { Builder } from './builder'
 
 const dropZone = document.getElementById('drop-zone')!
 const pasteBox = document.getElementById('paste-box') as HTMLTextAreaElement
 const runBtn = document.getElementById('run-btn') as HTMLButtonElement
 const fileInput = document.getElementById('file-input') as HTMLInputElement
 const editorMeta = document.getElementById('editor-meta')!
+const buildOutlook = document.getElementById('build-outlook')
 const status = document.getElementById('status')!
 const runLabel = document.getElementById('run-label')!
 const flightTitle = document.getElementById('flight-title')!
@@ -47,6 +50,26 @@ const warmPresetRuntime = (mode: DemoMode = demoMode): void => {
   })
 }
 
+// Start the guest download while the reader is still typing.
+//
+// It is between 15 and 49 MB depending on which guest the plan needs, and
+// nothing about it depends on the Dockerfile being finished, so waiting for the
+// button costs the whole download. Repeated calls for the same artifact are one
+// request: the URL is versioned and the response is cached.
+const warmed = new Set<string>()
+const warmGuest = (guest: Builder): void => {
+  const url = withWasmAssetVersion(guest.wasmPath)
+  if (warmed.has(url)) return
+  warmed.add(url)
+  fetch(url, { cache: 'force-cache', credentials: 'same-origin' })
+    .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error('HTTP ' + response.status))))
+    .then(() => console.info('[warm] ' + guest.kind + ' ' + guest.arch + ' guest is cached'))
+    .catch((error: unknown) => {
+      warmed.delete(url)
+      console.info('[warm] ' + guest.kind + ' guest did not prefetch: ' + String(error))
+    })
+}
+
 const countBaseImages = (source: string): number => {
   const refs = new Set<string>()
   for (const line of source.split('\n')) {
@@ -57,6 +80,8 @@ const countBaseImages = (source: string): number => {
   return refs.size
 }
 
+let warmTimer: ReturnType<typeof setTimeout> | undefined
+
 const updateEditor = (): void => {
   const source = pasteBox.value.trim()
   const lines = source ? source.split('\n').length : 0
@@ -64,6 +89,30 @@ const updateEditor = (): void => {
   runBtn.disabled = !source
   editorMeta.textContent = lines + ' line' + (lines === 1 ? '' : 's') + ' / ' +
     refs + ' base image' + (refs === 1 ? '' : 's')
+
+  let launch: LaunchPlan | null = null
+  try {
+    launch = source ? planLaunch({ dockerfile: pasteBox.value, mode: demoMode }) : null
+  } catch {
+    // A half-typed Dockerfile is the normal state of this box, not an error to
+    // report. The outlook simply has nothing to say until it parses.
+  }
+  if (buildOutlook) {
+    buildOutlook.textContent = launch
+      ? launch.summary + (launch.preset
+        ? ''
+        : ' / ' + Math.round(launch.guest.approximateDownloadBytes / 1e6) + ' MB guest')
+      : ''
+    buildOutlook.hidden = !launch
+  }
+
+  // Settled, not per keystroke: the plan can flip between guests mid-edit, and
+  // each guest is tens of megabytes.
+  clearTimeout(warmTimer)
+  if (launch && !launch.preset) {
+    const { guest } = launch
+    warmTimer = setTimeout(() => warmGuest(guest), 600)
+  }
 }
 
 const selectDemoMode = (mode: DemoMode): void => {
@@ -141,24 +190,14 @@ for (const button of modeButtons) {
 const run = (): void => {
   const dockerfile = pasteBox.value
   if (!dockerfile.trim()) return
-  const preset = matchPreset(dockerfile, demoMode === 'http' ? 8080 : null)
-  warmPresetRuntime()
+  const launch = planLaunch({ dockerfile, mode: demoMode })
+  if (launch.preset) warmPresetRuntime()
+  else warmGuest(launch.guest)
   runBtn.disabled = true
   runBtn.setAttribute('aria-busy', 'true')
   status.textContent = 'Opening runtime'
   status.className = 'status ok'
-  const params = new URLSearchParams({
-    [QUERY_PARAMS.net]: 'webvpn',
-    [QUERY_PARAMS.wasmUrl]: withWasmAssetVersion(
-      preset ? PRESET_WASM_PATHS[preset] : '/playground/playground.wasm',
-    ),
-  })
-  if (demoMode === 'http') {
-    params.set(QUERY_PARAMS.publish, 'tcp:8080')
-    params.set(QUERY_PARAMS.run, 'default')
-  }
-  const url = '/playground/?' + params + '#' + HASH_KEY_DOCKERFILE + '=' + b64encodeUtf8(dockerfile)
-  location.assign(url)
+  location.assign(launch.url)
 }
 
 runBtn.addEventListener('click', run)

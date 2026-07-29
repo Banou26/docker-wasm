@@ -9,7 +9,7 @@ the image it produces is not the one the Dockerfile describes.
 Its failure mode is the bad one: a build that exits 0 and hands back a different
 image, with nothing in the log to suggest it. So the checks are differential
 rather than unit. `npm run check-fast-path` runs the same Dockerfile through real
-`docker build` and through the fast path and compares what each produced: 101
+`docker build` and through the fast path and compares what each produced: 107
 checks, of which 39 are direct comparisons against docker (server 29.3.0).
 
 ```

@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs'
 import {
   planBuild, parseDockerfile, parseWord, parseEnv, wordText,
   chrootBuildScript, launchCommand, renderWord,
+  planLaunch, isPresetWasmURL, PRESET_DOCKERFILES,
 } from './fastpath.mjs'
 
 let failures = 0
@@ -222,6 +223,57 @@ check('an empty exec form ENTRYPOINT clears both',
 check('falls back to a shell', launch('RUN x\n', {}) === '/bin/sh')
 check('an inherited entrypoint applies',
   launch('CMD ["c"]\n', { entrypoint: ['i'] }) === "'i' 'c'")
+
+// --- what the editor page hands the runtime --------------------------------
+//
+// The runtime honours an explicit wasm URL over its own plan, so pinning one for
+// an edited Dockerfile silently disables the fast path. That is exactly what the
+// button used to do.
+
+{
+  const launch = planLaunch({ dockerfile: 'FROM alpine:3.21\nRUN echo hi\n', mode: 'shell' })
+  const url = new URL(launch.url, 'https://x.invalid')
+  check('an edited Dockerfile pins no artifact, leaving the plan in charge',
+    !url.searchParams.has('wasm-url'), launch.url)
+  check('and never names the buildah guest', !launch.url.includes('playground.wasm'), launch.url)
+  check('an edited Dockerfile boots the runner guest', launch.guest.kind === 'runner', launch.guest.kind)
+  const builder = planLaunch({ dockerfile: 'FROM alpine\nCOPY . /app\n', mode: 'shell' }).guest
+  check('the runner is the smaller download of the two',
+    launch.guest.approximateDownloadBytes < builder.approximateDownloadBytes,
+    launch.guest.approximateDownloadBytes + ' vs ' + builder.approximateDownloadBytes)
+  check('the Dockerfile travels in the hash, not the query',
+    url.hash.startsWith('#dockerfile=') && !url.search.includes('dockerfile'), launch.url)
+}
+{
+  const launch = planLaunch({ dockerfile: 'FROM alpine\nCOPY . /app\n', mode: 'shell' })
+  check('a Dockerfile the fast path declines boots the builder',
+    launch.guest.kind === 'builder' && launch.summary.includes('COPY'), launch.summary)
+  check('and still pins no artifact', !launch.url.includes('wasm-url'), launch.url)
+}
+{
+  const launch = planLaunch({ dockerfile: PRESET_DOCKERFILES.shell, mode: 'shell' })
+  const pinned = new URL(launch.url, 'https://x.invalid').searchParams.get('wasm-url')
+  check('a preset does pin its own artifact', pinned !== null, launch.url)
+  // The runtime only ignores a pinned URL it recognises as a preset's, which is
+  // the check that made the old bug invisible.
+  check('and the runtime recognises it as one', isPresetWasmURL(pinned ?? ''), pinned)
+}
+{
+  const launch = planLaunch({ dockerfile: 'FROM alpine:3.21\nEXPOSE 8080\nCMD ["x"]\n', mode: 'http' })
+  const params = new URL(launch.url, 'https://x.invalid').searchParams
+  check('service mode publishes the port and runs the image command',
+    params.get('publish') === 'tcp:8080' && params.get('run') === 'default', launch.url)
+}
+{
+  const launch = planLaunch({ dockerfile: 'FROM alpine:3.21\nRUN echo hi\n', mode: 'shell' })
+  check('the summary says the base needs no transfer when the guest is it',
+    launch.summary.includes('no transfer'), launch.summary)
+}
+{
+  const launch = planLaunch({ dockerfile: 'FROM debian:12\nRUN echo hi\n', mode: 'shell' })
+  check('and says what it will pull when it is not',
+    launch.summary.includes('pull debian:12'), launch.summary)
+}
 
 // --- the shell must actually accept it -------------------------------------
 

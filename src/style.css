@@ -517,6 +517,23 @@ main {
   font-size: 11px;
 }
 
+/* What the button is about to do, worked out from the source as it is typed. */
+.build-outlook {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--acid);
+  background: var(--white);
+  color: var(--ink);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.build-outlook[hidden] {
+  display: none;
+}
+
 .underlay {
   min-height: 330px;
   padding: 46px;
