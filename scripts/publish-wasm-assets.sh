@@ -127,6 +127,17 @@ for asset in "${assets[@]}"; do
     actual="${actual%% *}"
     [[ "$actual" == "$version" ]] || { echo "$name R2 digest does not match its object key" >&2; exit 1; }
 
+    # Requesting the public URL populates the CDN cache, and the response is
+    # stamped immutable for a year. Probing before the Pages Function can serve
+    # the object therefore pins a broken response until someone purges it. So
+    # when the caller has already said the Function is behind, do not touch the
+    # route at all.
+    if [[ "${ALLOW_PENDING_ASSET_ROUTE:-0}" == 1 ]]; then
+        echo "$name is verified in R2. Live route not requested: ALLOW_PENDING_ASSET_ROUTE is set," >&2
+        echo "which avoids caching a response the deployed Function cannot serve yet." >&2
+        continue
+    fi
+
     response="$(curl --silent --show-error --head --write-out $'\n%{http_code}' "$url")"
     status="${response##*$'\n'}"
     headers="${response%$'\n'*}"
@@ -148,24 +159,21 @@ for asset in "${assets[@]}"; do
     fi
 
     if [[ "$status" != 200 || "$routed_actual" != "$version" ]]; then
-        # Either the route does not resolve yet, or it hands back something that
-        # does not decode to the artifact. The usual cause of the second is a
-        # Pages Function older than this publication: it stamps a fixed
-        # Content-Encoding, so a client asked to decode brotli as gzip fails.
         if [[ "$status" == 200 ]]; then
-            detail="the route did not return the artifact when decoded, which happens when the deployed Pages Function labels $content_encoding objects as something else"
+            detail="the route returned a body that does not decode to the artifact, which happens when the deployed Pages Function labels $content_encoding objects as something else"
         else
             detail="the route returned HTTP $status"
         fi
-        if [[ "${ALLOW_PENDING_ASSET_ROUTE:-0}" != 1 ]]; then
-            echo "$name: $detail." >&2
-            echo "The object itself is verified in R2. Deploy the Pages Function serving" >&2
-            echo "/wasm-assets/* so it echoes the stored Content-Encoding, then rerun to verify" >&2
-            echo "the public route. To publish now and check the route after the deploy, rerun" >&2
-            echo "with ALLOW_PENDING_ASSET_ROUTE=1." >&2
-            exit 1
-        fi
-        echo "$name is verified in R2. Live route check skipped: $detail." >&2
+        echo "$name: $detail." >&2
+        echo "The object itself is verified in R2." >&2
+        echo >&2
+        echo "This request has now cached that bad response at the edge for a year." >&2
+        echo "Purge it before retrying:" >&2
+        echo "  $url" >&2
+        echo >&2
+        echo "Then deploy the Pages Function serving /wasm-assets/* and rerun. To publish" >&2
+        echo "without touching the public route at all, rerun with ALLOW_PENDING_ASSET_ROUTE=1." >&2
+        exit 1
     fi
 done
 
