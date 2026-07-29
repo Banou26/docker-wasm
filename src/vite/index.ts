@@ -16,6 +16,7 @@
 import { readFile } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite'
 import {
   buildContainerImage,
@@ -27,6 +28,9 @@ import {
 
 const PREFIX = '\0fkn-container:'
 const DEV_BASE = '/@fkn-container/'
+// Emitted at the output root so its scope covers the whole site.
+const WORKER_FILE = 'fkn-container-coi.js'
+const WORKER_SOURCE = 'coi-serviceworker.js'
 
 export const CROSS_ORIGIN_ISOLATION_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
@@ -49,9 +53,25 @@ export type ContainersOptions = {
   builder?: string
   // Path to an existing container2wasm binary. Built in a container otherwise.
   c2wPath?: string
-  // Set the COOP/COEP headers on the dev and preview servers. On by default:
-  // without them SharedArrayBuffer is unavailable and nothing runs.
-  crossOriginIsolation?: boolean
+  // How the page becomes cross-origin isolated, which the runtime requires.
+  //
+  // `headers` (default) sets COOP/COEP on the dev and preview servers, and
+  // expects your host to send them in production.
+  //
+  // `service-worker` additionally emits a worker that supplies those headers
+  // itself and registers it from every HTML entry. Use it when you cannot set
+  // headers on your host at all, such as GitHub Pages or a static CDN. It costs
+  // one page reload on a visitor's first load, needs HTTPS or localhost, and
+  // will not compose with an existing service worker at the same scope.
+  //
+  // `false` disables both.
+  crossOriginIsolation?: boolean | 'headers' | 'service-worker'
+  // COEP value to request. `credentialless` lets cross-origin subresources load
+  // without credentials and needs no cooperation from them, but Safari and
+  // Firefox for Android do not support it. `require-corp` is supported
+  // everywhere, but every cross-origin resource must then send CORP, and
+  // cross-origin iframes must send COEP of their own.
+  coep?: 'credentialless' | 'require-corp'
   // Named images built regardless of whether anything imports them. Useful for
   // warming the cache in CI.
   images?: Record<string, ImageSpec>
@@ -81,8 +101,24 @@ const parseQuery = (search: string): Query | null => {
 
 const formatBytes = (bytes: number): string => (bytes / 1e6).toFixed(1) + ' MB'
 
+const isolationMode = (options: ContainersOptions): 'headers' | 'service-worker' | false => {
+  const value = options.crossOriginIsolation
+  if (value === false) return false
+  if (value === 'service-worker') return 'service-worker'
+  return 'headers'
+}
+
+const readIsolationWorker = async (coep: string): Promise<string> => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const source = await readFile(join(here, 'assets', WORKER_SOURCE), 'utf8')
+  return source.replace('__FKN_CONTAINER_COEP__', coep)
+}
+
 export const containers = (options: ContainersOptions = {}): Plugin => {
   const builder = options.builder ?? 'docker'
+  const isolation = isolationMode(options)
+  const coep = options.coep ?? 'credentialless'
+  const isolationHeaders = { ...CROSS_ORIGIN_ISOLATION_HEADERS, 'Cross-Origin-Embedder-Policy': coep }
   let config: ResolvedConfig
   let cacheDir: string
   let server: ViteDevServer | null = null
@@ -156,9 +192,12 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
       // The runtime spawns module workers; keep that format in dev too so the
       // served and built pages behave the same.
       worker: { format: 'es' as const },
-      ...(options.crossOriginIsolation === false ? {} : {
-        server: { headers: { ...CROSS_ORIGIN_ISOLATION_HEADERS } },
-        preview: { headers: { ...CROSS_ORIGIN_ISOLATION_HEADERS } },
+      // The dev and preview servers can set the headers directly, which avoids
+      // the service worker's reload during development even when production
+      // will rely on it.
+      ...(isolation === false ? {} : {
+        server: { headers: { ...isolationHeaders } },
+        preview: { headers: { ...isolationHeaders } },
       }),
     }),
 
@@ -172,12 +211,21 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
 
     configureServer (devServer) {
       server = devServer
-      if (options.crossOriginIsolation !== false) {
+      if (isolation !== false) {
         devServer.middlewares.use((_request, response, next) => {
-          for (const [name, value] of Object.entries(CROSS_ORIGIN_ISOLATION_HEADERS)) {
+          for (const [name, value] of Object.entries(isolationHeaders)) {
             response.setHeader(name, value)
           }
           next()
+        })
+      }
+      if (isolation === 'service-worker') {
+        devServer.middlewares.use('/' + WORKER_FILE, (_request, response) => {
+          void readIsolationWorker(coep).then((source) => {
+            response.setHeader('Content-Type', 'text/javascript')
+            response.setHeader('Service-Worker-Allowed', '/')
+            response.end(source)
+          })
         })
       }
       devServer.middlewares.use(DEV_BASE, (request, response, next) => {
@@ -196,7 +244,26 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
       })
     },
 
+    transformIndexHtml: {
+      order: 'pre',
+      handler: () => (isolation !== 'service-worker' ? [] : [{
+        tag: 'script',
+        // Synchronous and first in head: the sooner it registers, the sooner
+        // the one-time reload happens.
+        attrs: { src: '/' + WORKER_FILE },
+        injectTo: 'head-prepend',
+      }]),
+    },
+
     async buildStart () {
+      if (isolation === 'service-worker' && isBuild) {
+        this.emitFile({
+          type: 'asset',
+          fileName: WORKER_FILE,
+          source: await readIsolationWorker(coep),
+        })
+      }
+
       for (const [name, spec] of Object.entries(options.images ?? {})) {
         const artifact = await buildContainerImage({
           ...spec,

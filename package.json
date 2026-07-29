@@ -38,7 +38,7 @@
     "dev-web": "vite --port 1234",
     "vite-build": "vite build && npm run compress-wasm",
     "build:pages": "WASM_ASSET_BASE=/wasm-assets vite build && node scripts/prepare-pages-build.cjs",
-    "build:lib": "node scripts/stage-lib-assets.cjs && vite build --config vite.lib.config.ts && vite build --config vite.node.config.ts && npm run build:types && node scripts/stage-lib-assets.cjs --clean",
+    "build:lib": "node scripts/stage-lib-assets.cjs && vite build --config vite.lib.config.ts && vite build --config vite.node.config.ts && copyfiles -u 2 \"src/vite/assets/*\" lib/vite && npm run build:types && node scripts/stage-lib-assets.cjs --clean",
     "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build-vite.json",
     "vite-build-dev": "vite build --watch",
     "build": "npm run make-docker && vite build && npm run copy-wasm && npm run compress-wasm",

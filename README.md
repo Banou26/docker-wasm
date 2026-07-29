@@ -100,7 +100,8 @@ The plugin also:
 | `cacheDir` | `node_modules/.cache/fkn-container` | Where converted images live. |
 | `builder` | `'docker'` | Container CLI to shell out to. |
 | `c2wPath` | built on demand | An existing container2wasm binary. |
-| `crossOriginIsolation` | `true` | Set the COOP/COEP headers in dev and preview. |
+| `crossOriginIsolation` | `'headers'` | `'headers'`, `'service-worker'`, or `false`. See below. |
+| `coep` | `'credentialless'` | `'credentialless'` or `'require-corp'`. See below. |
 | `images` | `{}` | Named images built even if nothing imports them. |
 
 Per-import overrides go in the query: `?container&arch=riscv64&memory=64&target=stage`.
@@ -125,7 +126,53 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 `assertCrossOriginIsolated()` turns a missing header into a clear error instead
-of a confusing one further down.
+of a confusing one further down, and distinguishes "the server never sent them"
+from "something in this browser is removing them".
+
+## When you cannot set headers
+
+Plenty of hosts do not let you set response headers: GitHub Pages, most static
+CDNs, anywhere your app is dropped into someone else's stack. Those headers are
+also honoured when a service worker supplies them, so the plugin can ship one:
+
+```ts
+containers({ crossOriginIsolation: 'service-worker' })
+```
+
+The plugin emits the worker at the output root and registers it from every HTML
+entry. Verified against a bare `python3 -m http.server` sending no headers at
+all: the page comes back `crossOriginIsolated: true` with `SharedArrayBuffer`
+available.
+
+What it costs:
+
+- One extra page load the first time a visitor arrives, while the worker
+  installs and the document is re-fetched through it.
+- HTTPS, or localhost. A service worker will not register otherwise.
+- It will not compose with an existing service worker registered at the same
+  scope. If you already have one, add the header logic to it instead.
+
+The dev and preview servers keep setting the headers directly either way, so
+development never pays the reload.
+
+## Browser support
+
+`SharedArrayBuffer` itself is available everywhere current: Chrome 68, Firefox
+79, Safari 15.2, Firefox Android 79, Chrome Android 89. The constraint is the
+COEP value:
+
+| | `credentialless` | `require-corp` |
+| --- | --- | --- |
+| Chrome, Chrome Android | 96 | yes |
+| Firefox desktop | 119 | yes |
+| **Firefox Android** | **no** | yes |
+| **Safari, iOS Safari** | **no** | yes |
+
+`credentialless` is the default because it needs no cooperation from
+cross-origin resources. If you need Safari or Firefox Android, use
+`coep: 'require-corp'` - but then every cross-origin resource you load must send
+`Cross-Origin-Resource-Policy`, and every cross-origin iframe must send a COEP
+header of its own.
 
 ## Runtime API
 
