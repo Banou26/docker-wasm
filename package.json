@@ -5,7 +5,11 @@
   "license": "MIT",
   "repository": "github:Banou26/docker-wasm",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "**/vendor/*.js",
+    "**/node-globals.ts",
+    "**/node-globals.js"
+  ],
   "files": [
     "lib"
   ],
