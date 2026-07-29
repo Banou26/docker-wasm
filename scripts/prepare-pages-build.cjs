@@ -2,10 +2,18 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 
 const root = path.join(__dirname, '..', 'build')
+// Served from R2 through functions/wasm-assets, so they are dropped from the
+// Pages upload rather than shipped with it. Every one of them is well past the
+// per-file limit, which is what the size check below turns into a failed build
+// rather than a failed deploy: an artifact added to `public/` and not listed
+// here breaks the deploy, and the guest artifacts arrive one target at a time.
 const externalArtifacts = [
     'out.wasm',
     'c2w-webvpn-proxy.wasm',
     'playground/playground.wasm',
+    'playground/runner.wasm',
+    'playground/runner-riscv64.wasm',
+    'playground/playground-riscv64.wasm',
     'presets/shell.wasm',
     'presets/http.wasm',
     'presets/preset-assets.json',

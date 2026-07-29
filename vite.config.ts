@@ -19,8 +19,14 @@ const devHeaders = {
   'Cache-Control': 'no-cache',
 }
 
+// Every artifact the page can request, so the built bundle carries a digest for
+// it. An artifact missing here gets version `dev`, which resolves to a path that
+// only the dev server has and 404s in production.
 const wasmAssetFiles = [
   ['/playground/playground.wasm', 'public/playground/playground.wasm'],
+  ['/playground/runner.wasm', 'public/playground/runner.wasm'],
+  ['/playground/runner-riscv64.wasm', 'public/playground/runner-riscv64.wasm'],
+  ['/playground/playground-riscv64.wasm', 'public/playground/playground-riscv64.wasm'],
   ['/c2w-webvpn-proxy.wasm', 'public/c2w-webvpn-proxy.wasm'],
   ['/c2w-net-proxy.wasm', 'public/c2w-net-proxy.wasm'],
   ['/out.wasm', 'public/out.wasm'],
@@ -47,8 +53,12 @@ const committedPresetAssets = JSON.parse(
 ) as PresetAssetManifest
 const wasmAssetBase = (process.env.WASM_ASSET_BASE ??
   (process.env.CF_PAGES ? '/wasm-assets' : '')).replace(/\/+$/, '')
+// A production build fails rather than ships if one of these has no published
+// digest. The riscv64 guests are deliberately absent: nothing selects them
+// without an explicit `arch=` in the URL, so they are not worth blocking on.
 const requiredExternalWasmAssets = [
   '/playground/playground.wasm',
+  '/playground/runner.wasm',
   '/c2w-webvpn-proxy.wasm',
   '/presets/shell.wasm',
   '/presets/http.wasm',

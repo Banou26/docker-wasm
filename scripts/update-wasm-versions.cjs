@@ -4,8 +4,14 @@ const { createHash } = require('node:crypto')
 
 const root = path.join(__dirname, '..')
 const manifestPath = path.join(root, 'wasm-assets.json')
+// Every artifact the page can ask for. A guest missing here cannot be versioned,
+// so `withWasmAssetVersion` falls back to `?v=dev`, which resolves to a path that
+// only exists in the dev server's `public/` and 404s in production.
 const assets = {
     '/playground/playground.wasm': 'playground/playground.wasm',
+    '/playground/runner.wasm': 'playground/runner.wasm',
+    '/playground/runner-riscv64.wasm': 'playground/runner-riscv64.wasm',
+    '/playground/playground-riscv64.wasm': 'playground/playground-riscv64.wasm',
     '/c2w-webvpn-proxy.wasm': 'c2w-webvpn-proxy.wasm',
     '/presets/shell.wasm': 'presets/shell.wasm',
     '/presets/http.wasm': 'presets/http.wasm',
