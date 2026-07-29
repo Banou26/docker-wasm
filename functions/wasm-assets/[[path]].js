@@ -7,9 +7,27 @@
 // echoed rather than assumed, so the bucket can move from gzip to brotli one
 // object at a time.
 
+// An allowlist rather than a passthrough: the key comes straight off the URL, so
+// anything not named here is a 404 before R2 is touched at all.
+//
+// A guest added to the page has to be added here in the same change, and this
+// Function has to be deployed before the object is published. Publishing first
+// makes the public URL 404, and that response is stamped immutable for a year,
+// so it sticks until somebody purges it. `ALLOW_PENDING_ASSET_ROUTE=1` on the
+// publish script exists for exactly that ordering.
 const objectRules = [
   {
-    pattern: /^(?:playground\/playground|c2w-webvpn-proxy|presets\/(?:shell|http))\.[0-9a-f]{64}\.wasm\.js$/,
+    pattern: new RegExp(
+      '^(?:' + [
+        'playground/playground',
+        // The fast path's guest, and the riscv64 builds of both.
+        'playground/runner',
+        'playground/runner-riscv64',
+        'playground/playground-riscv64',
+        'c2w-webvpn-proxy',
+        'presets/(?:shell|http)',
+      ].join('|') + ')\\.[0-9a-f]{64}\\.wasm\\.js$',
+    ),
     contentType: 'application/wasm',
   },
 ]
