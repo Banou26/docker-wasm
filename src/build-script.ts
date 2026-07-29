@@ -42,12 +42,17 @@ const applyWhiteouts =
 
 // Env and working directory are applied inside the chroot rather than around it,
 // because busybox chroot passes neither and the rootfs may not have `env`.
-const insideRootfs = (plan: ChrootPlan, command: string): string => {
+const insideRootfs = (plan: ChrootPlan, command: string, inPlace: boolean): string => {
   const prelude = plan.env
     .map(([key, value]) => 'export ' + key + '=' + shellQuote(value) + '; ')
     .join('')
+  // TODO(FAST-PATH-TODO.md): mkdir the workdir and let a real failure fail the
+  // build. `|| true` currently hides a missing directory and runs in / instead.
   const cd = plan.workdir ? 'cd ' + shellQuote(plan.workdir) + ' 2>/dev/null || true; ' : ''
-  return 'chroot ' + ROOTFS + ' /bin/sh -c ' + shellQuote(prelude + cd + command)
+  const body = shellQuote(prelude + cd + command)
+  // In-place, the guest's own root IS the base image, so there is nothing to
+  // chroot into and no copy to make first.
+  return inPlace ? '/bin/sh -c ' + body : 'chroot ' + ROOTFS + ' /bin/sh -c ' + body
 }
 
 // The image's own Entrypoint/Cmd apply when the Dockerfile overrides neither, so
@@ -73,6 +78,8 @@ export const launchCommand = (
 
 export type ChrootScriptOptions = {
   plan: ChrootPlan
+  // Empty when the guest already IS the base image, in which case there is
+  // nothing to transfer and the build runs directly in the guest's own root.
   layers: LayerRef[]
   // Resolved from the base image config, for when the Dockerfile sets neither.
   imageDefaults: { entrypoint?: string[]; cmd?: string[] }
@@ -83,12 +90,18 @@ export type ChrootScriptOptions = {
 
 export const chrootBuildScript = (options: ChrootScriptOptions): string => {
   const { plan, layers, imageDefaults, readyMarker, failMarker } = options
+  // No layers means the guest was built from this very base image, so the build
+  // runs in its own root. That removes the entire transfer, which is the
+  // dominant cost of every build measured so far (317s for 3.4MB on riscv64,
+  // against under a second for the build steps themselves).
+  const inPlace = layers.length === 0
   const parts: string[] = []
 
   parts.push('__t0=$(date +%s)\n')
   parts.push(PHASE_HELPER)
   parts.push('set -e\n')
-  parts.push('mkdir -p ' + ROOTFS + '\n')
+  if (inPlace) parts.push('__phase ' + shellQuote('base image is the guest, nothing to transfer') + '\n')
+  else parts.push('mkdir -p ' + ROOTFS + '\n')
 
   layers.forEach((layer, index) => {
     const label = 'layer ' + (index + 1) + '/' + layers.length
@@ -111,22 +124,23 @@ export const chrootBuildScript = (options: ChrootScriptOptions): string => {
   })
 
   if (layers.length > 1) parts.push(applyWhiteouts)
-  parts.push('__phase ' + shellQuote('base image ready') + '\n')
-
-  // RUN steps reach the network through the same gateway the page uses.
-  parts.push('mkdir -p ' + ROOTFS + '/etc\n')
-  parts.push("printf 'nameserver " + GATEWAY.split(':')[0] + "\\n' > " + ROOTFS + '/etc/resolv.conf\n')
+  if (!inPlace) {
+    parts.push('__phase ' + shellQuote('base image ready') + '\n')
+    // RUN steps reach the network through the same gateway the page uses.
+    parts.push('mkdir -p ' + ROOTFS + '/etc\n')
+    parts.push("printf 'nameserver " + GATEWAY.split(':')[0] + "\\n' > " + ROOTFS + '/etc/resolv.conf\n')
+  }
 
   plan.runs.forEach((command, index) => {
     const step = 'RUN ' + (index + 1) + '/' + plan.runs.length
     parts.push('__phase ' + shellQuote(step + ': ' + command.slice(0, 120)) + '\n')
-    parts.push(insideRootfs(plan, command) + ' || { echo ' + failMarker + '; exit 1; }\n')
+    parts.push(insideRootfs(plan, command, inPlace) + ' || { echo ' + failMarker + '; exit 1; }\n')
   })
 
   parts.push('__phase ' + shellQuote('build complete') + '\n')
   parts.push('echo ' + readyMarker + '\n')
   parts.push('__phase ' + shellQuote('starting container') + '\n')
-  parts.push(insideRootfs(plan, launchCommand(plan, imageDefaults)) + '\n')
+  parts.push(insideRootfs(plan, launchCommand(plan, imageDefaults), inPlace) + '\n')
 
   return parts.join('')
 }

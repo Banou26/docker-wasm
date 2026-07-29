@@ -34,6 +34,26 @@ export type Builder = {
   // Brotli-compressed size, measured rather than guessed, so the status view can
   // show a real total before the first byte arrives.
   approximateDownloadBytes: number
+  // The image this guest was built FROM, when it is one a Dockerfile might name.
+  //
+  // Getting a base image into the guest is the single dominant cost of a build:
+  // 3.4 MB through the artifact bridge measured at 317s on riscv64, where the
+  // build steps themselves are under a second. When the Dockerfile asks for the
+  // image the guest already is, all of that is avoidable.
+  baseImage?: string
+}
+
+// docker.io/library/alpine:3.21, alpine:3.21 and alpine (when 3.21 is current)
+// are the same image; only the first two are worth matching, since `latest`
+// moves and guessing wrong means building against the wrong base.
+export const sameImage = (a: string, b: string): boolean => {
+  const normalise = (ref: string): string => {
+    let rest = ref.trim()
+    if (rest.startsWith('docker.io/')) rest = rest.slice('docker.io/'.length)
+    if (rest.startsWith('library/')) rest = rest.slice('library/'.length)
+    return rest
+  }
+  return normalise(a) === normalise(b) && a.includes(':') && b.includes(':')
 }
 
 export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
@@ -43,12 +63,14 @@ export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
       wasmPath: '/playground/runner-riscv64.wasm',
       platform: { os: 'linux', arch: 'riscv64' },
       approximateDownloadBytes: 15_400_000,
+      baseImage: 'alpine:3.21',
     },
     amd64: {
       arch: 'amd64', kind: 'runner',
       wasmPath: '/playground/runner.wasm',
       platform: { os: 'linux', arch: 'amd64' },
       approximateDownloadBytes: 30_900_000,
+      baseImage: 'alpine:3.21',
     },
   },
   builder: {

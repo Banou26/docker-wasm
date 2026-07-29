@@ -13,9 +13,9 @@
 import { init, Terminal, FitAddon } from 'ghostty-web'
 
 import { createContainer, type ArtifactCache, type Container } from './lib'
-import { pullImage, pullRootfs, dockerfileFromRefs } from './registry'
+import { pullImage, pullRootfs, dockerfileFromRefs, type PulledRootfs } from './registry'
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
-import { BUILDERS, DEFAULT_BUILDER_ARCH, GUESTS, type BuilderArch } from './builder'
+import { BUILDERS, DEFAULT_BUILDER_ARCH, GUESTS, sameImage, type BuilderArch } from './builder'
 import { planBuild, type ChrootPlan } from './dockerfile'
 import { chrootBuildScript, GATEWAY } from './build-script'
 import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
@@ -423,6 +423,7 @@ const main = async (): Promise<void> => {
   if (buildPlan?.engine === 'chroot') {
     await runChrootBuild({
       container, artifacts, tail, plan: buildPlan, platform: guest.platform,
+      guestBaseImage: guest.baseImage,
       publishSpec, serviceMode, setConsoleState, writeConsole, sendRequest, watch,
     })
     return
@@ -457,6 +458,8 @@ const runChrootBuild = async (context: {
   tail: ConsoleTail
   plan: ChrootPlan
   platform: { os: string; arch: string }
+  // The image this guest was converted from, when it is one a Dockerfile can name.
+  guestBaseImage?: string
   publishSpec: PublishSpec | null
   serviceMode: boolean
   setConsoleState: (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error') => void
@@ -466,24 +469,39 @@ const runChrootBuild = async (context: {
 }): Promise<void> => {
   const { container, artifacts, tail, plan, platform, serviceMode, watch, sendRequest } = context
 
-  setStage(1, 'Pulling ' + plan.base)
-  const rootfs = await pullRootfs(plan.base, {
-    platform,
-    onLog: (line) => console.log('[registry] ' + plan.base + ': ' + line),
-  }).catch((error: unknown) => {
-    setStage(1, 'Image pull failed: ' + String(error), 'error')
-    throw error
-  })
-  mark('base-images-ready')
+  // The guest was converted from an image of its own. When the Dockerfile asks
+  // for that same image, the base is already here: no pull, no transfer through
+  // the artifact bridge, no extraction. That matters more than anything else in
+  // this path, because the transfer is its dominant cost (measured at 317s for
+  // 3.4MB on riscv64, against under a second for the build steps).
+  const inPlace = context.guestBaseImage !== undefined &&
+    sameImage(plan.base, context.guestBaseImage)
 
-  // Each layer becomes its own artifact key so the guest can stream them one at
-  // a time straight into tar, rather than materialising a combined archive on
-  // either side.
-  const layers = rootfs.layers.map((bytes, index) => {
-    const key = '__fkn_layer_' + index + '__'
-    artifacts.set(key, { promise: null, bytes })
-    return { key, bytes: bytes.length }
-  })
+  let rootfs: PulledRootfs = { layers: [], config: {} }
+  let layers: Array<{ key: string; bytes: number }> = []
+
+  if (inPlace) {
+    setStage(1, plan.base + ' is already this guest, skipping the pull')
+    mark('base-images-ready')
+  } else {
+    setStage(1, 'Pulling ' + plan.base)
+    rootfs = await pullRootfs(plan.base, {
+      platform,
+      onLog: (line) => console.log('[registry] ' + plan.base + ': ' + line),
+    }).catch((error: unknown) => {
+      setStage(1, 'Image pull failed: ' + String(error), 'error')
+      throw error
+    })
+    mark('base-images-ready')
+
+    // Each layer becomes its own artifact key so the guest fetches them one at a
+    // time, rather than materialising a combined archive on either side.
+    layers = rootfs.layers.map((bytes, index) => {
+      const key = '__fkn_layer_' + index + '__'
+      artifacts.set(key, { promise: null, bytes })
+      return { key, bytes: bytes.length }
+    })
+  }
 
   setStage(2, 'Building in Linux')
   const script = chrootBuildScript({
