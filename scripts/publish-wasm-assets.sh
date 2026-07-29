@@ -7,10 +7,23 @@ bucket=fkn-container-assets
 asset_origin=https://container.fkn.app/wasm-assets
 cache_control='public, max-age=31536000, immutable'
 # Brotli, not gzip: it takes the riscv64 demo image from 54 MB to 16 MB, and
-# every browser that can run the runtime at all negotiates it.
-content_encoding=br
-compressed_suffix=.br
+# every browser that can run the runtime at all negotiates it. Set
+# ASSET_CONTENT_ENCODING=gzip to publish for a Pages Function that still assumes
+# gzip.
+content_encoding="${ASSET_CONTENT_ENCODING:-br}"
+case "$content_encoding" in
+br) compressed_suffix=.br ;;
+gzip) compressed_suffix=.gz ;;
+*) echo 'ASSET_CONTENT_ENCODING must be br or gzip' >&2; exit 2 ;;
+esac
 wrangler="$repo/node_modules/.bin/wrangler"
+
+# One target per run. Publishing several would interleave manifest rewrites.
+if [[ $# -ne 1 ]]; then
+    echo 'Usage: npm run publish-wasm-assets -- playground|proxy|presets|all' >&2
+    echo 'Exactly one target per run.' >&2
+    exit 2
+fi
 
 case "${1:-}" in
 playground)
@@ -114,23 +127,45 @@ for asset in "${assets[@]}"; do
     actual="${actual%% *}"
     [[ "$actual" == "$version" ]] || { echo "$name R2 digest does not match its object key" >&2; exit 1; }
 
-    response="$(curl --silent --show-error --head --write-out $'\n%{http_code}' \
-        -H "Accept-Encoding: $content_encoding" "$url")"
+    response="$(curl --silent --show-error --head --write-out $'\n%{http_code}' "$url")"
     status="${response##*$'\n'}"
     headers="${response%$'\n'*}"
     headers="${headers//$'\r'/}"
     headers="${headers,,}"
-    if [[ "$status" == 404 && "$name" == preset-* && "${ALLOW_PENDING_ASSET_ROUTE:-0}" == 1 ]]; then
-        echo "$name is verified in R2; live route verification is pending deployment." >&2
-    else
-        [[ "$status" == 200 ]] || { echo "$name route returned HTTP $status" >&2; exit 1; }
-        [[ "$headers" == *"content-type: $content_type"* ]] || { echo "$name has the wrong content type" >&2; exit 1; }
-        [[ "$headers" == *"content-encoding: $content_encoding"* ]] || { echo "$name has the wrong content encoding" >&2; exit 1; }
-        [[ "$headers" == *$'cache-control: public, max-age=31536000, immutable'* ]] || { echo "$name has the wrong cache policy" >&2; exit 1; }
 
-        routed_actual="$(curl --fail --silent --show-error --compressed "$url" | sha256sum)"
+    # Content-Encoding is negotiated at the edge and comes back as whatever the
+    # client asked for, so it says nothing about how the object was stored.
+    # Fetching the body and decoding it is the only check that can tell.
+    if [[ "$status" == 200 ]]; then
+        [[ "$headers" == *"content-type: $content_type"* ]] || { echo "$name has the wrong content type" >&2; exit 1; }
+        [[ "$headers" == *$'cache-control: public, max-age=31536000, immutable'* ]] || { echo "$name has the wrong cache policy" >&2; exit 1; }
+    fi
+
+    routed_actual=''
+    if [[ "$status" == 200 ]]; then
+        routed_actual="$(curl --fail --silent --show-error --compressed "$url" 2>/dev/null | sha256sum || true)"
         routed_actual="${routed_actual%% *}"
-        [[ "$routed_actual" == "$version" ]] || { echo "$name route digest does not match its object key" >&2; exit 1; }
+    fi
+
+    if [[ "$status" != 200 || "$routed_actual" != "$version" ]]; then
+        # Either the route does not resolve yet, or it hands back something that
+        # does not decode to the artifact. The usual cause of the second is a
+        # Pages Function older than this publication: it stamps a fixed
+        # Content-Encoding, so a client asked to decode brotli as gzip fails.
+        if [[ "$status" == 200 ]]; then
+            detail="the route did not return the artifact when decoded, which happens when the deployed Pages Function labels $content_encoding objects as something else"
+        else
+            detail="the route returned HTTP $status"
+        fi
+        if [[ "${ALLOW_PENDING_ASSET_ROUTE:-0}" != 1 ]]; then
+            echo "$name: $detail." >&2
+            echo "The object itself is verified in R2. Deploy the Pages Function serving" >&2
+            echo "/wasm-assets/* so it echoes the stored Content-Encoding, then rerun to verify" >&2
+            echo "the public route. To publish now and check the route after the deploy, rerun" >&2
+            echo "with ALLOW_PENDING_ASSET_ROUTE=1." >&2
+            exit 1
+        fi
+        echo "$name is verified in R2. Live route check skipped: $detail." >&2
     fi
 done
 

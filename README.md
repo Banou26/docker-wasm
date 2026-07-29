@@ -289,10 +289,29 @@ they live in an R2 bucket served by a read-only Pages Function at
 `/wasm-assets/*`, keeping every request same-origin. Each URL carries its own
 content digest, so rebuilding one artifact does not invalidate the others.
 
+Publish one target per run:
+
 ```sh
-npm run publish-wasm-assets -- presets
+npm run publish-wasm-assets -- presets     # or proxy, playground, all
 git add wasm-assets.json preset-assets.json
 ```
+
+**Publish before deploying, and mind the encoding.** The objects are stored
+pre-compressed and the Function echoes the stored `Content-Encoding`, so an
+object written as brotli is unreadable through a Function that still hardcodes
+gzip. Since the keys carry content digests, a newly published artifact is
+unreferenced until the site that names it deploys, and both go live in the same
+Pages deployment. So:
+
+1. Publish the artifacts. The route check will fail while the deployed Function
+   is older than the new encoding; rerun with `ALLOW_PENDING_ASSET_ROUTE=1` to
+   accept the R2-side verification.
+2. Deploy the site and the Function together.
+3. Rerun the publication without the flag to verify the public route.
+
+Do not try to read the encoding off a `HEAD`: Cloudflare negotiates
+`Content-Encoding` at the edge and returns whatever the client asked for, so it
+tells you nothing about how the object was stored. Only decoding the body does.
 
 ## License
 
