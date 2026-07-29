@@ -41,6 +41,26 @@ export type Builder = {
   // build steps themselves are under a second. When the Dockerfile asks for the
   // image the guest already is, all of that is avoidable.
   baseImage?: string
+  // That image's own config, which a build against it needs and an in-place
+  // build never pulls. Without it the guest's own working directory and
+  // environment stand in for the image's, which are not the same thing: this
+  // guest adds `WORKDIR /work`, where the image itself sits at `/`.
+  //
+  // Checked against the registry by `npm run verify-guest-base` rather than
+  // trusted, since the two only agree as long as nobody edits one of them.
+  baseImageConfig?: {
+    env?: string[]
+    workdir?: string
+    entrypoint?: string[]
+    cmd?: string[]
+  }
+}
+
+// docker.io/library/alpine:3.21, verified against the registry.
+const ALPINE_321_CONFIG = {
+  env: ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'],
+  workdir: '/',
+  cmd: ['/bin/sh'],
 }
 
 // docker.io/library/alpine:3.21, alpine:3.21 and alpine (when 3.21 is current)
@@ -64,6 +84,7 @@ export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
       platform: { os: 'linux', arch: 'riscv64' },
       approximateDownloadBytes: 15_400_000,
       baseImage: 'alpine:3.21',
+      baseImageConfig: ALPINE_321_CONFIG,
     },
     amd64: {
       arch: 'amd64', kind: 'runner',
@@ -71,6 +92,7 @@ export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
       platform: { os: 'linux', arch: 'amd64' },
       approximateDownloadBytes: 30_900_000,
       baseImage: 'alpine:3.21',
+      baseImageConfig: ALPINE_321_CONFIG,
     },
   },
   builder: {

@@ -17,7 +17,8 @@ import { pullImage, pullRootfs, dockerfileFromRefs, type PulledRootfs } from './
 import { b64decodeUtf8, HASH_KEY_DOCKERFILE, QUERY_PARAMS, withWasmAssetVersion } from './shared'
 import { BUILDERS, DEFAULT_BUILDER_ARCH, GUESTS, sameImage, type BuilderArch } from './builder'
 import { planBuild, type ChrootPlan } from './dockerfile'
-import { chrootBuildScript, GATEWAY } from './build-script'
+import { scanLayers, type LayerOps } from './layers'
+import { chrootBuildScript, GATEWAY, type ImageDefaults, type LayerRef } from './build-script'
 import { isPresetWasmURL, matchPreset, PRESET_WASM_PATHS } from './presets'
 
 const timings: Record<string, number> = {}
@@ -424,6 +425,7 @@ const main = async (): Promise<void> => {
     await runChrootBuild({
       container, artifacts, tail, plan: buildPlan, platform: guest.platform,
       guestBaseImage: guest.baseImage,
+      guestBaseImageConfig: guest.baseImageConfig,
       publishSpec, serviceMode, setConsoleState, writeConsole, sendRequest, watch,
     })
     return
@@ -458,8 +460,10 @@ const runChrootBuild = async (context: {
   tail: ConsoleTail
   plan: ChrootPlan
   platform: { os: string; arch: string }
-  // The image this guest was converted from, when it is one a Dockerfile can name.
+  // The image this guest was converted from, when it is one a Dockerfile can
+  // name, and that image's own config, which an in-place build never pulls.
   guestBaseImage?: string
+  guestBaseImageConfig?: ImageDefaults
   publishSpec: PublishSpec | null
   serviceMode: boolean
   setConsoleState: (label: string, tone: 'waiting' | 'fetching' | 'success' | 'error') => void
@@ -477,15 +481,17 @@ const runChrootBuild = async (context: {
   const inPlace = context.guestBaseImage !== undefined &&
     sameImage(plan.base, context.guestBaseImage)
 
-  let rootfs: PulledRootfs = { layers: [], config: {} }
-  let layers: Array<{ key: string; bytes: number }> = []
+  let layers: LayerRef[] = []
+  // Everything the Dockerfile leaves unset comes from here. An in-place build
+  // never pulls the image, so its config travels with the guest instead.
+  let imageDefaults: ImageDefaults = context.guestBaseImageConfig ?? {}
 
   if (inPlace) {
     setStage(1, plan.base + ' is already this guest, skipping the pull')
     mark('base-images-ready')
   } else {
     setStage(1, 'Pulling ' + plan.base)
-    rootfs = await pullRootfs(plan.base, {
+    const rootfs: PulledRootfs = await pullRootfs(plan.base, {
       platform,
       onLog: (line) => console.log('[registry] ' + plan.base + ': ' + line),
     }).catch((error: unknown) => {
@@ -493,13 +499,28 @@ const runChrootBuild = async (context: {
       throw error
     })
     mark('base-images-ready')
+    imageDefaults = {
+      env: rootfs.config.Env,
+      workdir: rootfs.config.WorkingDir,
+      entrypoint: rootfs.config.Entrypoint,
+      cmd: rootfs.config.Cmd,
+    }
+
+    // Overlay deletions are resolved here, with the layers still separate, and
+    // travel to the guest as explicit paths. Reading tar headers with the
+    // platform's own gzip costs milliseconds; there is no equivalent the guest
+    // could do after extraction, because by then the layers are one directory.
+    const ops = await scanLayers(rootfs.layers).catch((error: unknown) => {
+      console.warn('[layers] scan failed, extracting without deletions: ' + String(error))
+      return [] as LayerOps[]
+    })
 
     // Each layer becomes its own artifact key so the guest fetches them one at a
     // time, rather than materialising a combined archive on either side.
     layers = rootfs.layers.map((bytes, index) => {
       const key = '__fkn_layer_' + index + '__'
       artifacts.set(key, { promise: null, bytes })
-      return { key, bytes: bytes.length }
+      return { key, bytes: bytes.length, ops: ops[index] }
     })
   }
 
@@ -507,7 +528,7 @@ const runChrootBuild = async (context: {
   const script = chrootBuildScript({
     plan,
     layers,
-    imageDefaults: { entrypoint: rootfs.config.Entrypoint, cmd: rootfs.config.Cmd },
+    imageDefaults,
     readyMarker: '__FKN_BUILD_' + 'OK__',
     failMarker: '__FKN_BUILD_' + 'FAILED__',
   })
