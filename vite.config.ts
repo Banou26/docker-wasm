@@ -4,11 +4,13 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { extname, join } from 'node:path'
 
-// COOP/COEP for SharedArrayBuffer + cross-origin iframe (the @fkn/lib RPC iframe
-// loads from a different origin and relies on credentialless embedding).
+// COOP/COEP for SharedArrayBuffer. `require-corp` rather than `credentialless` because Safari and
+// Firefox for Android do not implement the latter, and an unknown COEP value is ignored, which left
+// this page unusable there. The @fkn/lib RPC iframe carries its own COEP and CORP on the `?coi=1`
+// variant, so it no longer needs to be embedded credentialless (and keeps its credentials).
 const coiHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'credentialless',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
   'Cross-Origin-Resource-Policy': 'cross-origin',
 }
 

@@ -7,27 +7,6 @@
     <title>Container Runtime / FKN Lab</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/src/runtime.css">
-    <!-- Classic inline script - runs BEFORE the module so the patch is in
-         place when @fkn/lib's RPC iframe (to https://fkn.app/api or local
-         override) is created. COEP=credentialless requires the embedded doc
-         to either CORP-allow or be credentialless; setting el.credentialless
-         + the attribute covers both Chrome / spec accessor paths. -->
-    <script>
-      window.__shimMarker = 'installed-at-parse-time';
-      window.__iframeCreates = [];
-      (function () {
-        var _ce = Document.prototype.createElement;
-        Document.prototype.createElement = function (tag, opts) {
-          var el = _ce.call(this, tag, opts);
-          if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
-            window.__iframeCreates.push({ when: performance.now(), src: el.src });
-            try { el.credentialless = true; } catch (e) {}
-            try { el.setAttribute('credentialless', ''); } catch (e) {}
-          }
-          return el;
-        };
-      })();
-    </script>
   </head>
   <body class="runtime-page">
     <div class="runtime-app">

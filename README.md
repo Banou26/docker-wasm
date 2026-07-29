@@ -101,7 +101,7 @@ The plugin also:
 | `builder` | `'docker'` | Container CLI to shell out to. |
 | `c2wPath` | built on demand | An existing container2wasm binary. |
 | `crossOriginIsolation` | `'headers'` | `'headers'`, `'service-worker'`, or `false`. See below. |
-| `coep` | `'credentialless'` | `'credentialless'` or `'require-corp'`. See below. |
+| `coep` | `'require-corp'` | `'require-corp'` or `'credentialless'`. See below. |
 | `images` | `{}` | Named images built even if nothing imports them. |
 
 Per-import overrides go in the query: `?container&arch=riscv64&memory=64&target=stage`.
@@ -168,11 +168,20 @@ COEP value:
 | **Firefox Android** | **no** | yes |
 | **Safari, iOS Safari** | **no** | yes |
 
-`credentialless` is the default because it needs no cooperation from
-cross-origin resources. If you need Safari or Firefox Android, use
-`coep: 'require-corp'` - but then every cross-origin resource you load must send
-`Cross-Origin-Resource-Policy`, and every cross-origin iframe must send a COEP
-header of its own.
+`require-corp` is the default because it is the only value that works
+everywhere. An unsupported COEP value is ignored rather than rejected, so a page
+sending `credentialless` on Safari or Firefox Android is simply not isolated and
+the runtime cannot start at all.
+
+The cost of `require-corp` is that every cross-origin resource the page loads
+must send `Cross-Origin-Resource-Policy` or be fetched with CORS, and every
+cross-origin iframe must send a COEP header of its own. If your page loads
+third-party images or fonts that do neither, `coep: 'credentialless'` lifts that
+requirement, at the price of those two browsers.
+
+Note that `credentialless` covers subresources only, never nested documents. A
+cross-origin iframe still needs its own COEP under either value; the iframe
+`credentialless` attribute is what exempts it, and that is Chromium only.
 
 ## Runtime API
 

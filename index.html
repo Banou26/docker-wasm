@@ -7,23 +7,6 @@
     <title>Container Lab by FKN</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/src/style.css">
-    <!-- Classic inline script: runs before the module so the patch is in place
-         when the FKN transport creates its RPC iframe. COEP=credentialless
-         requires the embedded document to be marked, and setting both the
-         property and the attribute covers both accessor paths. -->
-    <script>
-      (function () {
-        var create = Document.prototype.createElement;
-        Document.prototype.createElement = function (tag, options) {
-          var element = create.call(this, tag, options);
-          if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
-            try { element.credentialless = true; } catch (e) {}
-            try { element.setAttribute('credentialless', ''); } catch (e) {}
-          }
-          return element;
-        };
-      })();
-    </script>
   </head>
   <body>
     <div class="site-shell">

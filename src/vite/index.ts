@@ -34,7 +34,7 @@ const WORKER_SOURCE = 'coi-serviceworker.js'
 
 export const CROSS_ORIGIN_ISOLATION_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'credentialless',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
   'Cross-Origin-Resource-Policy': 'cross-origin',
 }
 
@@ -66,11 +66,19 @@ export type ContainersOptions = {
   //
   // `false` disables both.
   crossOriginIsolation?: boolean | 'headers' | 'service-worker'
-  // COEP value to request. `credentialless` lets cross-origin subresources load
-  // without credentials and needs no cooperation from them, but Safari and
-  // Firefox for Android do not support it. `require-corp` is supported
-  // everywhere, but every cross-origin resource must then send CORP, and
-  // cross-origin iframes must send COEP of their own.
+  // COEP value to request.
+  //
+  // `require-corp` (default) is supported everywhere, at the cost that every
+  // cross-origin resource the page loads must send CORP or be fetched with
+  // CORS, and cross-origin iframes must send COEP of their own.
+  //
+  // `credentialless` lets cross-origin subresources load without credentials
+  // and needs no cooperation from them, which is easier on an existing page,
+  // but Safari and Firefox for Android do not implement it. An unknown COEP
+  // value is ignored, so on those browsers the page is simply not isolated and
+  // the runtime cannot start at all. It does not cover cross-origin iframes
+  // either; the iframe `credentialless` attribute does, and that is Chromium
+  // only.
   coep?: 'credentialless' | 'require-corp'
   // Named images built regardless of whether anything imports them. Useful for
   // warming the cache in CI.
