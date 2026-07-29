@@ -111,7 +111,7 @@ class ConsoleTail {
       this.phases.push({ label: match[1]!, atMs, sinceMs })
       this.lastPhaseAt = atMs
       console.info(
-        '[phase] ' + match[1] + ' — took ' + (sinceMs / 1000).toFixed(1) + 's' +
+        '[phase] ' + match[1] + ': took ' + (sinceMs / 1000).toFixed(1) + 's' +
         ' (wall clock, ' + (atMs / 1000).toFixed(1) + 's from navigation)',
       )
     }
