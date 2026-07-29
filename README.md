@@ -173,6 +173,11 @@ everywhere. An unsupported COEP value is ignored rather than rejected, so a page
 sending `credentialless` on Safari or Firefox Android is simply not isolated and
 the runtime cannot start at all.
 
+Verified on the live demo in all three engines (Chromium, Gecko, WebKit): each
+one comes back cross-origin isolated with `SharedArrayBuffer` and
+`Atomics.wait`, boots the guest, and gets a real response back. Firefox Android
+confirmed on a real device.
+
 The cost of `require-corp` is that every cross-origin resource the page loads
 must send `Cross-Origin-Resource-Policy` or be fetched with CORS, and every
 cross-origin iframe must send a COEP header of its own. If your page loads
