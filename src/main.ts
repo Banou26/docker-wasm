@@ -90,12 +90,34 @@ class ConsoleTail {
     serviceFailed: false,
   }
 
+  // Wall-clock arrival of each `== label +Ns ==` marker, timed by the page.
+  //
+  // The guest's own `+Ns` cannot be trusted and must not be compared across
+  // guests: Bochs and TinyEMU keep time differently, and the same layer fetch
+  // that Bochs reported as 12s of guest time TinyEMU reported as 331s, while a
+  // human waited roughly three minutes for both. Only this side has a real clock.
+  readonly phases: Array<{ label: string; atMs: number; sinceMs: number }> = []
+  private lastPhaseAt = performance.now()
+
   read (): string {
     return this.text
   }
 
+  private recordPhases (chunk: string): void {
+    for (const match of chunk.matchAll(/== (.+?) \+\d+s ==/g)) {
+      const atMs = Math.round(performance.now())
+      this.phases.push({
+        label: match[1]!,
+        atMs,
+        sinceMs: Math.round(atMs - this.lastPhaseAt),
+      })
+      this.lastPhaseAt = atMs
+    }
+  }
+
   push (bytes: Uint8Array): void {
     const chunk = this.decoder.decode(bytes, { stream: true }).replace(ANSI, '')
+    this.recordPhases(chunk)
     this.text = (this.text + chunk).slice(-4096)
     this.markers.buildOk ||= chunk.includes('__FKN_BUILD_OK__')
     this.markers.buildFailed ||= chunk.includes('__FKN_BUILD_FAILED__')
@@ -256,7 +278,13 @@ const main = async (): Promise<void> => {
   const tail = new ConsoleTail()
   // Readable from the page for diagnostics: the terminal itself renders to a
   // canvas, so without this there is no way to see what the guest last said.
-  ;(window as typeof window & { dockerWasmConsole?: () => string }).dockerWasmConsole = () => tail.read()
+  ;(window as typeof window & {
+    dockerWasmConsole?: () => string
+    dockerWasmPhases?: () => Array<{ label: string; atMs: number; sinceMs: number }>
+  }).dockerWasmConsole = () => tail.read()
+  ;(window as typeof window & {
+    dockerWasmPhases?: () => Array<{ label: string; atMs: number; sinceMs: number }>
+  }).dockerWasmPhases = () => tail.phases
 
   setStage(0, 'Booting Linux guest')
   const container = createContainer({
