@@ -1,9 +1,4 @@
-// Typed access to the vendored browser_wasi_shim bundles.
-//
-// Both files are UMD. Under an ES module they find no `module`/`define`, so
-// they assign their exports onto `self`, which is the worker global scope.
-// Importing them for their side effect and then reading the globals keeps the
-// upstream code byte-identical while giving the rest of the library real types.
+// Both vendored files are UMD. Under an ES module they find no `module`/`define`, so they assign their exports onto `self`, which is the worker global scope.
 
 import './vendor/browser-wasi-shim.js'
 import './vendor/browser-wasi-defs.js'
@@ -45,6 +40,5 @@ export const WASI = globals.WASI
 export const Iovec = globals.Iovec
 export const Ciovec = globals.Ciovec
 
-// wasi-libc errno values the shims return.
 export const ERRNO_INVAL = 28
 export const ERRNO_AGAIN = 6

@@ -1,21 +1,10 @@
-// Wire contract shared by the main thread and both workers.
-//
-// Every worker -> main request is a postMessage followed by an Atomics.wait on
-// a SharedArrayBuffer control word. The main thread writes the reply into the
-// same buffer and notifies. Layout, in bytes:
-//
-//   [0..4)   control  (Int32) 0 = request in flight, 1 = reply ready
-//   [4..8)   status   (Int32) negative = error, otherwise request specific
-//   [8..12)  length   (Int32) bytes written into data
-//   [12..)   data     (Uint8) payload window
-//
-// The TTY channel uses its own buffer with a simpler layout, inherited from
-// xterm-pty: control word followed by an Int32 payload array.
+// control is 0 = request in flight, 1 = reply ready; status is negative = error, otherwise request specific
 
 export const STREAM_HEADER_BYTES = 12
 export const STREAM_DATA_BYTES = 64 * 1024
 export const STREAM_BUFFER_BYTES = STREAM_HEADER_BYTES + STREAM_DATA_BYTES
 
+// the TTY channel uses its own buffer with a simpler layout inherited from xterm-pty: a control word followed by an Int32 payload array
 export const TTY_BUFFER_BYTES = 4 + 4 * 1024
 
 export type StreamView = {

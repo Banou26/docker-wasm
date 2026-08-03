@@ -1,9 +1,4 @@
-// Runs the gVisor network stack (c2w-webvpn-proxy.wasm).
-//
-// It terminates the guest's IP traffic and hands each TCP or UDP flow to the
-// main thread, which dials it over FKN. The `env` imports below are the seam:
-// every one is a blocking round-trip whose Go-side declaration lives in
-// src/proxy/webvpn.go. Keep the two in sync.
+// every `env` import below has a Go-side declaration in src/proxy/webvpn.go. Keep the two in sync.
 
 import { Ciovec, ERRNO_INVAL, WASI, type Wasi } from '../wasi'
 import type { NetstackWorkerInit } from '../protocol'
@@ -74,8 +69,7 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
     new Uint8Array(memory(), ptr, length).slice()
 
   return {
-    // Reports the next FKN connection waiting to be routed into the guest.
-    // Writes id 0 when the queue is empty.
+    // writes id 0 when the queue is empty
     webvpn_ingress_poll: (networkP: number, idP: number, guestPortP: number) => {
       const status = channel.request({ type: 'webvpn_ingress_poll' })
       if (status < 0) return ERRNO_INVAL
@@ -86,7 +80,7 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
       return 0
     },
 
-    // network: 0 = TCP, 1 = UDP.
+    // network: 0 = TCP, 1 = UDP
     webvpn_connect: (network: number, hostP: number, hostLen: number, port: number, idP: number) => {
       const status = channel.request({
         type: 'webvpn_connect', network, host: copyIn(hostP, hostLen), port,
@@ -96,7 +90,6 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
       return 0
     },
 
-    // Writes the number of bytes accepted; 0 means backpressure.
     webvpn_send: (id: number, bufP: number, bufLen: number, nwrittenP: number) => {
       const status = channel.request({ type: 'webvpn_send', id, buf: copyIn(bufP, bufLen) })
       if (status < 0) return ERRNO_INVAL
@@ -104,7 +97,7 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
       return 0
     },
 
-    // Writes bytes read (0 means would-block) and flags (bit 0 = EOF).
+    // writes bytes read (0 means would-block) and flags (bit 0 = EOF)
     webvpn_recv: (id: number, bufP: number, bufLen: number, nreadP: number, flagsP: number) => {
       const length = Math.min(bufLen, channel.data.byteLength)
       const status = channel.request({ type: 'webvpn_recv', id, len: length })
@@ -117,7 +110,6 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
       return 0
     },
 
-    // Half-close: sends FIN, leaves the receive direction open.
     webvpn_end: (id: number) => channel.request({ type: 'webvpn_end', id }) < 0 ? ERRNO_INVAL : 0,
 
     webvpn_close: (id: number) => {
@@ -134,8 +126,6 @@ const egressImports =(wasi: Wasi, channel: Channel): WebAssembly.ModuleImports =
       return 0
     },
 
-    // Local artifact bridge: the guest can wget files the page put in the
-    // image cache. Used by the Dockerfile builder image, not by prebuilt ones.
     webvpn_image_size: (refP: number, refLen: number, sizeP: number) => {
       const status = channel.request({ type: 'webvpn_image_size', ref: copyIn(refP, refLen) })
       if (status < 0) return ERRNO_INVAL

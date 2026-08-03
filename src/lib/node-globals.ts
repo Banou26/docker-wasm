@@ -1,12 +1,4 @@
-// The FKN transport is published against Node's stream API, and the browser
-// build of that API reaches for a global `process` at runtime rather than
-// importing one. Without it, the first `socket.resume()` throws
-// "process.nextTick is not a function" and every flow through the netstack
-// stalls.
-//
-// Installing it here, from a module both the netstack and the HTTP client
-// import first, keeps the fix inside the library instead of making it a
-// consumer's setup step.
+// the browser build of Node's stream API reaches for a global `process` at runtime, so without this the first `socket.resume()` throws
 
 import nodeProcess from 'process/browser.js'
 

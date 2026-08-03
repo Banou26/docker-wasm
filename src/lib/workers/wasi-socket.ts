@@ -1,11 +1,3 @@
-// The single-connection socket pair the emulator and the network stack use to
-// exchange Ethernet frames.
-//
-// container2wasm gives the guest a WASI listening socket; the netstack WASM
-// connects to it. Neither side has a real socket implementation under
-// wasi_snapshot_preview1, so both ends are serviced by the main thread over the
-// shared request channel. Ported from container2wasm's worker-util.js.
-
 import { Ciovec, ERRNO_AGAIN, ERRNO_INVAL, Iovec, type Wasi } from '../wasi'
 import type { Channel } from './channel'
 

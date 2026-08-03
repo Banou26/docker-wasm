@@ -1,14 +1,3 @@
-// The build, shown as it happens.
-//
-// What was here before was four fixed stages and a sentence, which is the same
-// display whether the build is pulling 40 MB, extracting a rootfs, or running
-// the reader's third RUN. This shows the plan it chose and why, then the RUN
-// steps from the reader's own file ticking over with the time each took.
-//
-// Every number comes from the page's clock. The guest's own `+Ns` is in the
-// console for anyone who wants it, but it does not advance while the guest is
-// blocked on I/O, so it reads as zero for exactly the phases that take longest.
-
 import { onBuildEvent, type BuildEvent, type PlannedStep } from './build-events'
 
 const seconds = (ms: number): string =>
@@ -16,9 +5,7 @@ const seconds = (ms: number): string =>
 
 const megabytes = (bytes: number): string => (bytes / 1e6).toFixed(1) + ' MB'
 
-// Which planned step a phase marker belongs to. The marker carries the step
-// number the script generated, which is more reliable than matching the command
-// text back, since the label truncates at 120 characters.
+// Match on the step number the marker carries: the label truncates at 120 characters.
 const stepIndexOf = (label: string): number | null => {
   const match = /^RUN (\d+)\/(\d+)/.exec(label)
   return match ? Number(match[1]) - 1 : null
@@ -59,8 +46,6 @@ export const mountBuildView = (root: HTMLElement): void => {
   const rows: Row[] = []
   let running: number | null = null
   // When the running row opened, so its duration covers every marker it spans.
-  // The base image row covers three (fetch, extract, device setup) and reporting
-  // only the last gap made a 15 second transfer read as 0.6 seconds.
   let runningSince: number | null = null
   let startedAt: number | null = null
 
@@ -85,8 +70,7 @@ export const mountBuildView = (root: HTMLElement): void => {
     row.timing.textContent = seconds(ms)
   }
 
-  // A marker is printed before the work it names, so a row runs from the marker
-  // that opened it until the marker that opens the next one.
+  // A marker is printed before the work it names, so a row runs from the marker that opened it until the next one.
   const openRow = (index: number | null, atMs: number): void => {
     if (index !== null && index === running) return
     if (running !== null && runningSince !== null) settle(rows[running], atMs - runningSince)
@@ -111,8 +95,6 @@ export const mountBuildView = (root: HTMLElement): void => {
       : 'Full builder. ' + event.reason + '. ' + guest
     summary.dataset.engine = event.engine
 
-    // One row per instruction the reader wrote, plus the work around them, so
-    // the list reads as their file rather than as this page's internals.
     rows.length = 0
     list.replaceChildren()
     if (!event.inPlace && event.base) {
@@ -132,22 +114,17 @@ export const mountBuildView = (root: HTMLElement): void => {
 
     const step = stepIndexOf(event.label)
     if (step !== null) {
-      // The step list may start with a FROM row, so the RUN numbering is offset.
       const offset = rows.findIndex((row) => row.element.dataset.key?.startsWith('run:'))
       openRow((offset === -1 ? 0 : offset) + step, event.atMs)
       return
     }
 
-    // Everything up to the first RUN is getting the base image in place, and it
-    // is one row however many markers the script prints along the way.
     if (/fetch layer|extract|base image ready/.test(event.label)) {
       const base = rows.findIndex((row) => row.element.dataset.key === 'base')
       if (base !== -1) openRow(base, event.atMs)
       return
     }
 
-    // The build is over: close whatever was still running rather than leaving it
-    // spinning at the end of a finished build.
     if (/build complete|starting container/.test(event.label)) openRow(null, event.atMs)
   }
 

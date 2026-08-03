@@ -1,11 +1,4 @@
 /// <reference types="node" />
-// Locating the container2wasm converter.
-//
-// The plugin already requires Docker, so the last resort builds the pinned
-// converter in a Go container rather than downloading a binary or asking for a
-// Go toolchain. It runs once and the result is cached next to the converted
-// images, which keeps the setup instructions for a consumer at "install
-// Docker".
 
 import { spawn } from 'node:child_process'
 import { access, chmod, mkdir } from 'node:fs/promises'

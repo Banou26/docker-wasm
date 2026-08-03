@@ -1,16 +1,3 @@
-// Static server for the docker-wasm launcher + runtime.
-//
-// Serves the Vite build output:
-//   /                            Dockerfile launcher (build/index.html)
-//   /playground/                 runtime (build/playground/index.html)
-//   /playground/playground.wasm  the c2w-built alpine+buildah image (one-time, ~150 MB)
-//   /proxy                       fkn-proxy-compatible CORS shim for in-browser
-//                                Docker Hub pulls
-//
-// COOP same-origin + COEP credentialless throughout, so SharedArrayBuffer works
-// for the wasi-on-browser worker bridge and the @fkn/lib RPC iframe loads.
-//
-// NO docker, NO c2w, NO build queue. The "build" runs inside the wasm guest.
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
@@ -36,8 +23,7 @@ const types = {
 }
 const coiHeaders = {
     'Cross-Origin-Opener-Policy': 'same-origin',
-    // credentialless allows cross-origin iframes (e.g., @fkn/lib's
-    // https://fkn.app/api bridge) while still giving SharedArrayBuffer.
+    // credentialless allows cross-origin iframes (e.g., @fkn/lib's https://fkn.app/api bridge) while still giving SharedArrayBuffer.
     'Cross-Origin-Embedder-Policy': 'credentialless',
     'Cross-Origin-Resource-Policy': 'cross-origin',
 }
@@ -102,15 +88,8 @@ function acceptsEncoding(header, wanted) {
     return wildcard
 }
 
-// fkn-proxy-compatible shim. @fkn/lib's serverProxyFetch (in fkn/web) sends
-// fetches here with fkn-proxy-{protocol,hostname,pathname,search,headers}
-// describing the *real* target. We reconstruct, fetch upstream, and return the
-// upstream response with its headers re-packed under fkn-proxy-headers so the
-// caller sees the real status/headers/body. CORS headers are set so the
-// cross-origin fkn/web iframe (e.g. http://127.0.0.1:1234) can reach us.
-//
-// This is a drop-in for fkn/proxy when you don't need anti-bot / Postgres
-// caching - for plain Docker Hub HTTPS it's all we need.
+// @fkn/lib's serverProxyFetch sends fetches here with fkn-proxy-{protocol,hostname,pathname,search,headers} describing the *real* target,
+// and reads the upstream response back out of fkn-proxy-headers.
 async function handleProxy(req, res) {
     try {
         const protocol = (req.headers['fkn-proxy-protocol'] || 'https').toString()
@@ -184,8 +163,6 @@ http.createServer((req, res) => {
         return handleProxy(req, res)
     }
 
-    // /playground -> 301 to /playground/ so the HTML's relative script/CSS
-    // references resolve under /playground/.
     if (p === '/playground') {
         res.writeHead(301, { Location: '/playground/' + (u.search || '') + (u.hash || '') })
         return res.end()

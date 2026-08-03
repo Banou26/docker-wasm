@@ -1,8 +1,4 @@
-// Worker side of the pseudo-terminal channel.
-//
-// Same wire format xterm-pty's TtyClient uses, reimplemented here so the
-// library's workers stay plain ES modules with no UMD bundle to load. The
-// buffer holds a control word followed by an Int32 payload array.
+// Same wire format xterm-pty's TtyClient uses.
 
 import type { TtyRequest } from '../protocol'
 import { post } from './post'

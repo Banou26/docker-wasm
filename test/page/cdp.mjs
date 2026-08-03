@@ -1,11 +1,4 @@
-// Minimal CDP driver against the chromium already running on the machine.
-//
-// No puppeteer or playwright package is installed, and launching a second
-// chromium hands off to that instance instead of starting one, so this talks the
-// protocol directly. It is also a headed browser with a real profile, which is
-// the condition the guest network actually works under: a headless one stalls on
-// the in-page gateway fetch, which has twice now looked like a bug in this
-// project and twice been the harness.
+// a headless chromium stalls on the in-page gateway fetch, so this attaches to the headed one already running
 
 const ENDPOINT = process.env.CDP || 'http://127.0.0.1:41951'
 
@@ -60,9 +53,7 @@ export const connect = async (url) => {
   await send('Runtime.enable')
   await send('Page.enable')
 
-  // Deliberately setTimeout rather than requestAnimationFrame anywhere below: an
-  // unfocused tab throttles rAF so the promise never settles and the evaluate
-  // dies at its timeout looking like a frozen renderer.
+  // deliberately setTimeout rather than requestAnimationFrame below: an unfocused tab throttles rAF so the promise never settles
   const evaluate = async (expression) => {
     const result = await send('Runtime.evaluate', {
       expression, awaitPromise: true, returnByValue: true,

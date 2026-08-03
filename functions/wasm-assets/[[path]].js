@@ -1,26 +1,9 @@
-// Read-only bridge from Pages to the R2 bucket holding the converted images.
-//
-// The artifacts are far past the Pages per-file limit, so they live in R2 and
-// are served from here, same-origin, with the digest in the key. Objects are
-// stored already compressed and passed through untouched: `encodeBody: 'manual'`
-// tells the runtime the body is final, and the stored Content-Encoding is
-// echoed rather than assumed, so the bucket can move from gzip to brotli one
-// object at a time.
-
-// An allowlist rather than a passthrough: the key comes straight off the URL, so
-// anything not named here is a 404 before R2 is touched at all.
-//
-// A guest added to the page has to be added here in the same change, and this
-// Function has to be deployed before the object is published. Publishing first
-// makes the public URL 404, and that response is stamped immutable for a year,
-// so it sticks until somebody purges it. `ALLOW_PENDING_ASSET_ROUTE=1` on the
-// publish script exists for exactly that ordering.
+// A guest added to the page must be added here and this Function deployed before the object is published, because a 404 here is cached immutable for a year (`ALLOW_PENDING_ASSET_ROUTE=1` on the publish script covers that ordering).
 const objectRules = [
   {
     pattern: new RegExp(
       '^(?:' + [
         'playground/playground',
-        // The fast path's guest, and the riscv64 builds of both.
         'playground/runner',
         'playground/runner-riscv64',
         'playground/playground-riscv64',
@@ -32,6 +15,7 @@ const objectRules = [
   },
 ]
 
+// Objects are stored already compressed and passed through untouched: `encodeBody: 'manual'` tells the runtime the body is final, and the stored Content-Encoding is echoed rather than assumed, so the bucket can move from gzip to brotli one object at a time.
 const contentEncodingOf = (object) => object.httpMetadata?.contentEncoding || 'gzip'
 
 const responseHeaders = (object, contentType) => {
@@ -56,10 +40,7 @@ export async function onRequest (context) {
   }
 
   const requested = Array.isArray(params.path) ? params.path.join('/') : params.path
-  // A leading generation segment only changes the public URL. It exists to
-  // sidestep an edge cache holding a response from before this Function could
-  // serve the object, and is stripped before the R2 lookup so the stored keys
-  // never move.
+  // The leading generation segment only changes the public URL, and is stripped here so the stored R2 keys never move.
   const key = typeof requested === 'string' ? requested.replace(/^g[0-9]+\//, '') : requested
   const rule = typeof key === 'string'
     ? objectRules.find(({ pattern }) => pattern.test(key))
@@ -84,8 +65,7 @@ export async function onRequest (context) {
   if (cached) {
     const cachedHeaders = new Headers(cached.headers)
     cachedHeaders.set('Content-Type', rule.contentType)
-    // The cache entry stores the encoding it was written with, because the
-    // colocated cache strips Content-Encoding from what it keeps.
+    // The cache entry stores the encoding it was written with, because the colocated cache strips Content-Encoding from what it keeps.
     cachedHeaders.set('Content-Encoding', cachedHeaders.get('X-Stored-Encoding') || 'gzip')
     cachedHeaders.delete('X-Stored-Encoding')
     return new Response(cached.body, {

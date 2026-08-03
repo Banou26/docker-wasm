@@ -1,16 +1,5 @@
-// e2e_test.go - hermetic end-to-end test of the netstack data path.
-//
-// It can't use the real container2wasm emulator (that needs the c2w build
-// toolchain) or @webvpn (browser-only), so it substitutes:
-//   - the guest: a second gVisor stack with an ethernet link endpoint, wired to
-//     the proxy over a loopback TCP connection carrying QEMU-protocol frames -
-//     exactly the framing the real emulator emits.
-//   - @webvpn egress: net.Dial to local echo servers.
-//
-// What it proves: a guest TCP/UDP flow is terminated by the proxy's gVisor
-// stack, handed to the dial-pluggable forwarder, dialed out, and bytes flow
-// both ways. That's the whole novel data path; only the two substituted ends
-// differ from production.
+// Hermetic end-to-end test of the netstack data path: a second gVisor stack
+// stands in for the container2wasm emulator, and net.Dial for @webvpn egress.
 package netstack
 
 import (
@@ -40,13 +29,10 @@ import (
 const guestIP = "192.168.127.10"
 const guestMAC = "02:00:00:00:00:10"
 
-// dstIP is an arbitrary off-subnet address the guest "connects to". The proxy
-// forwarder extracts it from the terminated flow; the test's dial asserts it
-// and redirects to a local echo server (standing in for @webvpn egress).
+// dstIP is an arbitrary off-subnet address the guest "connects to".
 const dstIP = "10.0.0.1"
 
 func TestTCPForwardThroughProxy(t *testing.T) {
-	// 1. local "internet" TCP echo server (stands in for the @webvpn dest).
 	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +56,6 @@ func TestTCPForwardThroughProxy(t *testing.T) {
 	}
 	guest := setup(t, dial)
 
-	// 2. guest dials the destination *through the proxy* and round-trips data.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	conn, err := gonet.DialContextTCP(ctx, guest, tcpip.FullAddress{
@@ -178,7 +163,6 @@ func TestTCPIngressToGuest(t *testing.T) {
 }
 
 func TestUDPForwardThroughProxy(t *testing.T) {
-	// local UDP echo server.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -232,14 +216,7 @@ func TestUDPForwardThroughProxy(t *testing.T) {
 	t.Logf("UDP round-trip OK: guest -> proxy forwarder (dst=%s) -> dial -> echo -> back (%d bytes)", gotAddr, n)
 }
 
-// TestDNSForwardThroughProxy exercises the gateway DNS forwarder: the guest's
-// resolver (pointed at the gateway by DHCP in production) sends a UDP query to
-// gateway:53, which the proxy relays out via the dial seam to an upstream
-// resolver and writes the answer back. This is what lets the builder guest
-// resolve registry hostnames (e.g. registry-1.docker.io) before pulling.
 func TestDNSForwardThroughProxy(t *testing.T) {
-	// fake upstream resolver: echoes the query back with the QR (response) bit
-	// set, so we can prove the relay round-trips without a real DNS server.
 	up, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -255,13 +232,12 @@ func TestDNSForwardThroughProxy(t *testing.T) {
 			resp := make([]byte, n)
 			copy(resp, buf[:n])
 			if n >= 4 {
-				resp[2] |= 0x80 // set QR bit -> "this is a response"
+				resp[2] |= 0x80 // set the QR bit so the echoed query reads as a response, proving the relay round trip without a real DNS server
 			}
 			up.WriteTo(resp, addr)
 		}
 	}()
 
-	// UpstreamDNS points at the fake resolver; dial is a plain pass-through.
 	guest := setupWithDNS(t, net.Dial, up.LocalAddr().String())
 
 	conn, err := gonet.DialUDP(guest, nil, &tcpip.FullAddress{
@@ -274,7 +250,7 @@ func TestDNSForwardThroughProxy(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// minimal DNS query: id=0xBEEF, RD set, 1 question for "example.com" A IN.
+	// minimal DNS query: id=0xBEEF, RD set, 1 question for "example.com" A IN
 	query := []byte{
 		0xBE, 0xEF, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0,
@@ -350,8 +326,6 @@ func TestDNSResolveThroughProxy(t *testing.T) {
 	}
 }
 
-// setup builds the proxy network + a guest stack connected to it over a
-// QEMU-framed loopback connection, and returns the guest stack.
 func setup(t *testing.T, dial DialFunc) *stack.Stack {
 	return setupWithDNS(t, dial, "")
 }
@@ -363,7 +337,7 @@ func setupWithDNS(t *testing.T, dial DialFunc, upstreamDNS string) *stack.Stack 
 func setupWithConfig(t *testing.T, cfg Config) *stack.Stack {
 	t.Helper()
 
-	// loopback transport between guest and proxy (buffered, unlike net.Pipe).
+	// loopback transport between guest and proxy: buffered, unlike net.Pipe
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +356,6 @@ func setupWithConfig(t *testing.T, cfg Config) *stack.Stack {
 	}
 	proxyConn := <-accepted
 
-	// proxy: our netstack, egress via the supplied dial (stands in for @webvpn).
 	nw, err := New(cfg)
 	if err != nil {
 		t.Fatalf("netstack.New: %v", err)
@@ -405,8 +378,6 @@ func setupWithConfig(t *testing.T, cfg Config) *stack.Stack {
 	return guest
 }
 
-// newGuestStack builds a minimal gVisor "guest" with an ethernet link endpoint
-// bridged to conn via QEMU framing.
 func newGuestStack(t *testing.T, conn net.Conn) *stack.Stack {
 	t.Helper()
 
@@ -446,7 +417,6 @@ func newGuestStack(t *testing.T, conn net.Conn) *stack.Stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	// outbound: drain the guest's link queue, frame, write to conn.
 	go func() {
 		for {
 			pkt := base.ReadContext(ctx)
@@ -461,7 +431,6 @@ func newGuestStack(t *testing.T, conn net.Conn) *stack.Stack {
 			}
 		}
 	}()
-	// inbound: read frames from conn, inject into the guest's link.
 	go func() {
 		for {
 			frame, err := readQemuFrame(conn)

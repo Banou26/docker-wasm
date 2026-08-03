@@ -4,10 +4,8 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { extname, join } from 'node:path'
 
-// COOP/COEP for SharedArrayBuffer. `require-corp` rather than `credentialless` because Safari and
-// Firefox for Android do not implement the latter, and an unknown COEP value is ignored, which left
-// this page unusable there. The @fkn/lib RPC iframe carries its own COEP and CORP on the `?coi=1`
-// variant, so it no longer needs to be embedded credentialless (and keeps its credentials).
+// `require-corp` rather than `credentialless` because Safari and Firefox for Android do not implement the latter and ignore the unknown value.
+// It works here because the @fkn/lib RPC iframe carries its own COEP and CORP on the `?coi=1` variant, so it no longer has to be embedded credentialless and keeps its credentials.
 const coiHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
@@ -19,9 +17,7 @@ const devHeaders = {
   'Cache-Control': 'no-cache',
 }
 
-// Every artifact the page can request, so the built bundle carries a digest for
-// it. An artifact missing here gets version `dev`, which resolves to a path that
-// only the dev server has and 404s in production.
+// Every artifact the page can request: one missing here gets version `dev`, a path that only the dev server has and that 404s in production.
 const wasmAssetFiles = [
   ['/playground/playground.wasm', 'public/playground/playground.wasm'],
   ['/playground/runner.wasm', 'public/playground/runner.wasm'],
@@ -53,9 +49,7 @@ const committedPresetAssets = JSON.parse(
 ) as PresetAssetManifest
 const wasmAssetBase = (process.env.WASM_ASSET_BASE ??
   (process.env.CF_PAGES ? '/wasm-assets' : '')).replace(/\/+$/, '')
-// A production build fails rather than ships if one of these has no published
-// digest. The riscv64 guests are deliberately absent: nothing selects them
-// without an explicit `arch=` in the URL, so they are not worth blocking on.
+// The riscv64 guests are deliberately absent: nothing selects them without an explicit `arch=` in the URL.
 const requiredExternalWasmAssets = [
   '/playground/playground.wasm',
   '/playground/runner.wasm',
@@ -153,9 +147,7 @@ if (wasmAssetBase) {
   validatePresetAssets('Local', localPresetAssets, wasmAssetVersions)
 }
 
-// Override the @fkn/lib iframe URL before Rollup calculates content hashes.
-// Set FKN_API=http://127.0.0.1:1234/api.html for a fully-local fkn/web dev
-// server; defaults to the prod URL otherwise.
+// Overrides the @fkn/lib iframe URL, and must stay ahead of Rollup's content hashing.
 const fknApi = new URL(process.env.FKN_API || 'https://fkn.app/api')
 const fknApiPath = fknApi.pathname + fknApi.search + fknApi.hash
 
@@ -183,9 +175,7 @@ export default defineConfig({
     },
   },
   resolve: {
-    // Exact matches only. A bare string alias also rewrites subpaths, so a
-    // `process` entry would turn `process/browser.js` into
-    // `process/browser/browser.js`.
+    // Exact matches only: a bare string alias also rewrites subpaths, turning `process/browser.js` into `process/browser/browser.js`.
     alias: [
       { find: /^node:buffer$/, replacement: 'buffer' },
       { find: /^node:events$/, replacement: 'events' },
@@ -281,8 +271,7 @@ export default defineConfig({
       },
     },
     {
-      // Serve dist/* raw during dev (the Go-wasm artifact lands there before
-      // make's copy step propagates it into public/). Mirrors libav-wasm.
+      // The Go-wasm artifact lands in dist/ before make's copy step propagates it into public/.
       name: 'serve-dist-raw',
       configureServer: (server) => {
         server.middlewares.use('/dist', (req, res, next) => {

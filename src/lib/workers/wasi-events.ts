@@ -1,8 +1,4 @@
-// poll_oneoff subscription and event structs.
-//
-// Ported from container2wasm's wasi-util.js, which in turn follows the layout
-// proposed in browser_wasi_shim issue 14. Only the fields the emulators
-// actually read are written back.
+// Struct layout ported from container2wasm's wasi-util.js, which in turn follows the layout proposed in browser_wasi_shim issue 14.
 
 export type EventVariant = 'clock' | 'fd_read' | 'fd_write'
 

@@ -1,11 +1,9 @@
 /// <reference types="node" />
-// Node half of the published package: the Vite plugin and the CLI.
 
 import { defineConfig } from 'vite'
 import { builtinModules } from 'node:module'
 
 export default defineConfig({
-  // The demo site's static files are not part of the package.
   publicDir: false,
   build: {
     target: 'node20',

@@ -1,18 +1,9 @@
-// Relays Ethernet frames between the guest worker and the netstack worker.
-//
-// Neither worker can talk to the other directly: both are blocked inside a
-// synchronous WASI program whenever they have something to say. The main thread
-// owns one buffer per worker and copies between them, so each side's send lands
-// in the other side's receive queue. Requests the netstack worker makes for
-// real egress are forwarded to the Netstack.
+// The two workers cannot talk directly: both are blocked inside a synchronous WASI program whenever they have something to say.
 
 import { STREAM_BUFFER_BYTES, viewStream, type StreamView } from './protocol'
 import type { Netstack, NetstackRequest } from './netstack'
 
-// Frames arrive one at a time and leave in 64 KiB windows, so the queue keeps
-// a chunk list rather than one growing buffer. Concatenating on every frame
-// makes the relay quadratic in the size of a burst, which shows up as stalls
-// exactly when the guest is busiest.
+// Keep the chunk list: concatenating into one growing buffer on every frame makes the relay quadratic in the size of a burst.
 class Queue {
   private chunks: Uint8Array[] = []
   private pending = 0
@@ -26,7 +17,6 @@ class Queue {
     this.pending += chunk.byteLength
   }
 
-  // Fills `into` with up to `limit` bytes and returns how many were written.
   drainInto (into: Uint8Array, limit: number): number {
     const want = Math.min(limit, into.byteLength, this.pending)
     let written = 0
@@ -78,7 +68,6 @@ class Endpoint {
     this.reply()
   }
 
-  // Moves up to `length` bytes out of the queue into the shared window.
   private drain (queue: Queue, length: number): void {
     this.view.length[0] = queue.drainInto(this.view.data, length)
   }
@@ -94,8 +83,6 @@ class Endpoint {
         this.reply()
         return
       }
-      // Sync handlers return true after writing their reply; async ones return
-      // a promise and write theirs when it settles.
       Promise.resolve()
         .then(async () => { await netstack.handle(request as unknown as NetstackRequest, this.view) })
         .catch((error: unknown) => {
@@ -178,8 +165,7 @@ export class FrameBridge {
     this.guestEndpoint = new Endpoint('guest', toNetstack, toGuest, netstack)
     this.netstackEndpoint = new Endpoint('netstack', toGuest, toNetstack, netstack)
     if (onGuestReadable) {
-      // The endpoint's own wake releases a parked frame poll. The guest may
-      // instead be parked on its console, so the runtime gets told as well.
+      // Chain rather than replace: the endpoint's own wake releases a parked frame poll, the guest may instead be parked on its console.
       const release = toGuest.wake
       toGuest.wake = () => {
         release?.()
@@ -188,8 +174,6 @@ export class FrameBridge {
     }
   }
 
-  // Bytes waiting for the guest to read. The console host consults this so a
-  // console poll never delays frames that have already arrived.
   get guestPending (): number { return this.toGuest.length }
 
   get guestBuffer (): SharedArrayBuffer { return this.guestEndpoint.buffer }

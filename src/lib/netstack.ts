@@ -1,13 +1,4 @@
-// Real egress for the guest, and the inbound route back into it.
-//
-// The netstack WASM terminates the guest's IP traffic and asks this module to
-// dial each flow. Outbound flows become FKN TCP or UDP sockets. Inbound flows
-// come from FKN loopback listeners: a browser connection to a published port is
-// handed to the netstack, which dials the guest's own DHCP lease.
-//
-// The buffer discipline matters. Every received chunk is copied before it is
-// queued, because the transport reuses its backing buffers between reads and
-// holding a view of one silently corrupts data that arrives later.
+// every received chunk is copied before it is queued: the transport reuses its backing buffers between reads
 
 import './node-globals'
 import * as dgram from '@fkn/lib/dgram'
@@ -57,8 +48,6 @@ export type ArtifactCacheEntry = {
   bytes: Uint8Array | null
 }
 
-// Files the page offers to the guest over its local gateway. Used by the
-// Dockerfile builder image; prebuilt images never touch it.
 export type ArtifactCache = Map<string, ArtifactCacheEntry>
 
 export type PublishedPort = {
@@ -80,8 +69,7 @@ const MAX_INGRESS_CONNECTIONS = 64
 
 export type NetstackOptions = {
   artifacts?: ArtifactCache
-  // Wire-format DNS resolver. Defaults to DNS over HTTPS, which answers in one
-  // round trip instead of the many the guest's resolver would make over UDP.
+  // wire-format DNS resolver, defaulting to DNS over HTTPS, which answers in one round trip instead of the many the guest's resolver would make over UDP
   dnsResolver?: (query: Uint8Array) => Promise<Uint8Array>
   onLog?: (message: string) => void
 }
@@ -218,7 +206,7 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
     try {
       if (state.kind === 'tcp') state.socket.destroy()
       else state.socket.close()
-    } catch { /* already gone */ }
+    } catch {}
     sockets.delete(id)
     ingressIds.delete(id)
   }
@@ -248,8 +236,7 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
           return
         }
         try {
-          // Held paused until the netstack claims it, so nothing is buffered
-          // for a connection the guest has not accepted yet.
+          // held paused until the netstack claims it, so nothing is buffered for a connection the guest has not accepted yet
           const id = registerTcp(socket, 'ingress :' + guestPort, { ingress: true, startPaused: true })
           ingressQueue.push({ id, guestPort })
         } catch {
@@ -358,7 +345,7 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
           return true
         }
         if (state.kind === 'tcp' && state.writeBlocked) {
-          status[0] = 0   // backpressure: the netstack retries
+          status[0] = 0   // 0 means backpressure: the netstack retries
           return true
         }
         try {
@@ -487,8 +474,6 @@ export const createNetstack = (options: NetstackOptions = {}): Netstack => {
         if (slice.length > 0) data.set(slice, 0)
         length[0] = slice.length
         status[0] = 0
-        // Coarse enough not to drown the console on a multi-megabyte artifact,
-        // fine enough to show whether the transfer is progressing or wedged.
         if (start % (1024 * 1024) < slice.length) {
           log('artifact ' + ref + ' served ' + start + '/' + entry.bytes.length)
         }

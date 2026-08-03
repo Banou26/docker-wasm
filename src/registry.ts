@@ -1,21 +1,11 @@
-// In-browser Docker Registry V2 client + docker-archive (USTAR) assembler.
-//
 // Docker Hub doesn't send CORS headers, so requests use FKN cloud fetch.
-//
-// Result of pullImage() is a Uint8Array containing a docker-archive tar (the
-// format `docker save` writes; `buildah pull docker-archive:` reads), which
-// the runtime serves to the c2w-webvpn-proxy worker via a wasmimport so the
-// guest can wget it and feed it to buildah.
 
 import { fetch as cloudFetch } from '@fkn/lib/cloud'
 
 export type Platform = { os: string; arch: string }
 
-// Layer sizes come from the manifest, so a pull knows its exact total before it
-// starts and progress is real rather than a spinner.
 export type PullProgress = {
   ref: string
-  // Layers whose bytes have fully arrived.
   layersDone: number
   layersTotal: number
   bytesReceived: number
@@ -72,10 +62,6 @@ const proxyFetch = async (url: string, opts: ProxyFetchInit = {}): Promise<Fetch
   return { status, headers, body: r }
 }
 
-// alpine                          -> registry-1.docker.io / library/alpine : latest
-// alpine:3.19                     -> registry-1.docker.io / library/alpine : 3.19
-// ghcr.io/foo/bar:tag             -> ghcr.io / foo/bar : tag
-// public.ecr.aws/docker/library/alpine:3.19 -> public.ecr.aws / docker/library/alpine : 3.19
 export const parseRef = (ref: string): Ref => {
   let registry = 'registry-1.docker.io'
   let path = ref
@@ -110,7 +96,6 @@ const fetchToken = async (www: string, repository: string, cacheKey: string): Pr
   const pending = registryTokenRequests.get(cacheKey)
   if (pending) return (await pending)?.value || null
 
-  // www: 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"'
   const m = www.match(/Bearer\s+(.+)/i)
   if (!m) return null
   const params: Record<string, string> = {}
@@ -214,9 +199,6 @@ const pickPlatform = (index: string, want: Platform): ManifestEntry | null => {
     || null
 }
 
-// The platforms a reference publishes. Manifest list only, so it is one small
-// request and cheap enough to run while someone is still typing. A single-platform
-// image reports the one it is, read from its config.
 export const manifestPlatforms = async (ref: string): Promise<Platform[]> => {
   const { registry, repository, tag, digest } = parseRef(ref)
   const m = await getManifest(registry, repository, digest || tag)
@@ -227,8 +209,7 @@ export const manifestPlatforms = async (ref: string): Promise<Platform[]> => {
     if (!Array.isArray(parsed.manifests)) return []
     return parsed.manifests
       .filter((entry: ManifestEntry) => entry.platform)
-      // Attestation manifests ride along in the same list with a placeholder
-      // architecture; they are not something anything can run.
+      // Attestation manifests ride along in the same list with a placeholder architecture.
       .filter((entry: ManifestEntry) => entry.platform.architecture !== 'unknown')
       .map((entry: ManifestEntry) => ({ os: entry.platform.os, arch: entry.platform.architecture }))
   }
@@ -249,8 +230,6 @@ const getBlobBytes = async (
   const url = 'https://' + registry + '/v2/' + repository + '/blobs/' + digest
   const r = await getWithAuth(url, repository)
   if (r.status !== 200) throw new Error('blob ' + digest + ' -> ' + r.status)
-  // Without a progress callback there is nothing to gain from streaming, and
-  // arrayBuffer() is the faster path.
   if (!onBytes || !r.body.body) {
     const ab = await r.body.arrayBuffer()
     return new Uint8Array(ab)
@@ -288,8 +267,6 @@ const mapConcurrent = async <T, R>(
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
   return results
 }
-
-// ---- USTAR writer: plain files + directory-implied paths only.
 
 const BLOCK = 512
 const octal = (n: number, w: number): string => {
@@ -332,8 +309,6 @@ const concat = (parts: Uint8Array[]): Uint8Array => {
   return out
 }
 
-// Config fields the fast path applies itself, since it never builds an image for
-// anything else to read them from.
 export type ImageConfig = {
   Env?: string[]
   Cmd?: string[]
@@ -344,16 +319,12 @@ export type ImageConfig = {
 export type FetchedImage = {
   configBytes: Uint8Array
   configDigest: string
-  // Gzipped layer tars in application order.
   layers: Array<{ digest: string; bytes: Uint8Array }>
   registry: string
   repository: string
   tag: string
 }
 
-// Everything both callers need: the manifest walk and the blob fetches. What
-// they do with the result differs, and that difference is the whole point of the
-// fast path, so it does not belong in here.
 const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedImage> => {
   const onLog = opts.onLog || (() => {})
   const platform = opts.platform || { os: 'linux', arch: 'amd64' }
@@ -361,7 +332,6 @@ const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedI
   const reference = digest || tag
   onLog('resolving ' + ref + ' -> ' + registry + '/' + repository + ':' + reference)
 
-  // Step 1: manifest. May be a manifest list -> follow.
   let m = await getManifest(registry, repository, reference)
   const isList = m.type.includes('manifest.list') || m.type.includes('image.index')
   if (isList) {
@@ -373,7 +343,6 @@ const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedI
   const mj = JSON.parse(m.body)
   if (!mj.config || !Array.isArray(mj.layers)) throw new Error('unsupported manifest schema')
 
-  // Step 2: fetch the config and layers concurrently while preserving order.
   onLog('fetch config ' + mj.config.digest)
   const configPromise = getBlobBytes(registry, repository, mj.config.digest)
   const configName = mj.config.digest.replace(/^sha256:/, '') + '.json'
@@ -388,8 +357,7 @@ const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedI
       ref,
       layersDone,
       layersTotal: layers.length,
-      // Concurrent layers can overshoot the manifest total slightly if a registry
-      // reports a stale size; clamp so a progress bar never runs past its end.
+      // Concurrent layers can overshoot the manifest total slightly if a registry reports a stale size; clamp so a progress bar never runs past its end.
       bytesReceived: Math.min(bytesReceived, bytesTotal),
       bytesTotal,
     })
@@ -416,8 +384,6 @@ const fetchImage = async (ref: string, opts: PullOptions = {}): Promise<FetchedI
   }
 }
 
-// The base image as the fast path wants it: layers to untar in order, plus the
-// config whose Env, WorkingDir, Cmd and Entrypoint the Dockerfile may override.
 export type PulledRootfs = { layers: Uint8Array[]; config: ImageConfig }
 
 export const pullRootfs = async (ref: string, opts: PullOptions = {}): Promise<PulledRootfs> => {
@@ -426,23 +392,18 @@ export const pullRootfs = async (ref: string, opts: PullOptions = {}): Promise<P
   try {
     config = (JSON.parse(new TextDecoder().decode(image.configBytes)).config ?? {}) as ImageConfig
   } catch {
-    // A config we cannot read costs the image's own defaults, not the build:
-    // the Dockerfile's own CMD/ENV still apply.
     opts.onLog?.('image config could not be parsed, continuing without its defaults')
   }
   opts.onLog?.('rootfs ready: ' + image.layers.length + ' layer(s)')
   return { layers: image.layers.map((layer) => layer.bytes), config }
 }
 
-// The base image as buildah wants it: a docker-archive, the format `docker save`
-// writes and `buildah pull docker-archive:` reads.
 export const pullImage = async (ref: string, opts: PullOptions = {}): Promise<Uint8Array> => {
   const onLog = opts.onLog || (() => {})
   const { configBytes, configDigest, layers: fetchedLayers, registry, repository, tag } =
     await fetchImage(ref, opts)
   const configName = configDigest.replace(/^sha256:/, '') + '.json'
-  // docker-archive layer dir = layer digest minus "sha256:".
-  // skopeo (which buildah uses to read docker-archive:) accepts gzipped layers.
+  // docker-archive layer dir = layer digest minus "sha256:", and skopeo (which buildah uses to read docker-archive:) accepts gzipped layers.
   const layerEntries = fetchedLayers.map((layer) => ({
     dir: layer.digest.replace(/^sha256:/, ''),
     file: 'layer.tar',

@@ -1,13 +1,4 @@
-// Real builds, in a real browser, driven end to end.
-//
-// The docker differential in test/fast-path settles whether the generated script
-// is correct. It cannot settle whether the page ever runs it: the guest picked
-// from the build plan, the artifact bridge, the emulated `wget`, the `chroot` and
-// the emulated `tar` only exist here. A bug that made every build boot the wrong
-// guest lived for weeks precisely because nothing drove this path.
-//
-// Each case ends in a RUN that prints its own state, so the assertion is about
-// what the built image contains rather than about the build finishing.
+// Real builds in a real browser: the guest picked from the build plan, the artifact bridge, the emulated `wget`, the `chroot` and the emulated `tar` only exist here.
 
 import { connect } from './cdp.mjs'
 
@@ -22,10 +13,6 @@ const check = (label, condition, detail) => {
   }
 }
 
-// Everything the fixes changed, in one line the guest prints for itself:
-// a variable built from two earlier ones, a working directory the base image
-// does not have and reached in two relative steps, a /dev/null that discards,
-// and the PATH that only exists if the image config was read.
 const PROBE = 'echo junk > /dev/null; ' +
   'echo "PROBE<$BANNER|$(pwd)|$(wc -c < /dev/null)|${PATH%%:*}>"'
 
@@ -59,8 +46,7 @@ const runBuild = async (label, dockerfile, expectations) => {
     check('the build finishes', !/fail/i.test(state), JSON.stringify(state) + ' in ' + wall.toFixed(1) + 's')
 
     const tail = String(await page.evaluate('window.dockerWasmConsole ? window.dockerWasmConsole() : ""'))
-    // The guest echoes the command before running it, so the format string is in
-    // the tail either way. Only a line the shell produced counts.
+    // the guest echoes the command before running it, so the format string is in the tail either way
     const printed = (tail.replace(/\r?\n/g, '').match(/PROBE<[^>]*>/g) ?? [])
       .filter((line) => !line.includes('$'))
     check('the built image is what the Dockerfile describes',
@@ -86,15 +72,11 @@ const runBuild = async (label, dockerfile, expectations) => {
   }
 }
 
-// The guest was converted from this image, so there is nothing to transfer. This
-// is the path that decides whether the demo feels instant.
 const inPlaceSeconds = await runBuild('in place, the guest is the base image', dockerfileFor('alpine:3.21'), {
   'skips the transfer entirely': /nothing to transfer/,
   'never mentions a layer': /^(?!.*layer).*$/,
 })
 
-// A different base image, so the layers travel through the artifact bridge and
-// the build runs under chroot with a /dev this script had to create.
 const transferSeconds = await runBuild('with a transfer, built under chroot', dockerfileFor('alpine:3.19'), {
   'fetches the layer': /fetch layer 1\/1/,
   'extracts it': /extract layer 1\/1/,

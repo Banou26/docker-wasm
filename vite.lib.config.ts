@@ -1,19 +1,10 @@
 /// <reference types="node" />
-// Browser half of the published package: the runtime, its two module workers,
-// and the network stack module they load.
-//
-// Deliberately not Vite's `build.lib` mode. That mode inlines every emitted
-// asset as base64 regardless of `assetsInlineLimit`, which would turn the 16 MB
-// network stack into a 22 MB string inside the entry chunk: no streaming
-// compilation, no code cache, and a 22 MB parse on every import.
+// deliberately not Vite's `build.lib` mode: it inlines every emitted asset as base64 regardless of `assetsInlineLimit`
 
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  // Relative, so `lib/index.js` finds its assets wherever the package is
-  // installed.
   base: './',
-  // The demo site's static files are not part of the package.
   publicDir: false,
   build: {
     target: 'es2022',
@@ -26,9 +17,6 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rollupOptions: {
       input: { index: 'src/lib/index.ts' },
-      // The transport stays external so a consumer resolves one copy of it.
-      // Everything else, including the Node shims the transport reaches for,
-      // is bundled so installing the package is enough.
       external: [/^@fkn\/lib(\/|$)/],
       preserveEntrySignatures: 'exports-only',
       output: {

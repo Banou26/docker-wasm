@@ -1,15 +1,3 @@
-// Runtime page. Boots whatever the Dockerfile builder handed it and shows the
-// guest console next to the browser side of the conversation.
-//
-// Two shapes arrive here. A built-in example is already a converted image, so it
-// starts directly. An edited Dockerfile starts the builder guest instead: base
-// images are pulled in the page and offered to the guest over its local
-// gateway, then a generated script is typed into the shell, which runs Buildah
-// inside the guest.
-//
-// Everything below the UI is @fkn/container: the workers, the network stack,
-// the published ports, and the HTTP client are all the library's.
-
 import { init, Terminal, FitAddon } from 'ghostty-web'
 
 import { createContainer, type ArtifactCache, type Container } from './lib'
@@ -75,16 +63,13 @@ const getPublishSpec = (query: URLSearchParams): PublishSpec | null => {
 const resolveAsset = (path: string): string =>
   new URL(withWasmAssetVersion(path), location.href).toString()
 
-// The guest console is a TTY. Keeping a plain-text tail of it, with the escape
-// sequences removed, is how the page notices a shell prompt or one of the
-// script's markers without scraping the rendered grid.
+// The guest console is a TTY, so the tail is kept as plain text with these escape sequences stripped.
 const ANSI = /\u001B(?:\[[0-9;?]*[ -/]*[@-~]|[()][A-Za-z0-9]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)?|[=>NOM78])/g
 
 class ConsoleTail {
   private text = ''
   private decoder = new TextDecoder()
-  // The rendered terminal is a canvas, so the plain-text tail is the only thing
-  // the page (or a test driving it) can actually read back.
+  // The rendered terminal is a canvas, so this plain-text tail is the only thing the page or a test can read back.
   readonly markers = {
     buildOk: false,
     buildFailed: false,
@@ -93,12 +78,7 @@ class ConsoleTail {
     serviceFailed: false,
   }
 
-  // Wall-clock arrival of each `== label +Ns ==` marker, timed by the page.
-  //
-  // The guest's own `+Ns` cannot be trusted and must not be compared across
-  // guests: Bochs and TinyEMU keep time differently, and the same layer fetch
-  // that Bochs reported as 12s of guest time TinyEMU reported as 331s, while a
-  // human waited roughly three minutes for both. Only this side has a real clock.
+  // The guest's own `+Ns` must not be compared across guests: only this side has a real clock.
   readonly phases: Array<{ label: string; atMs: number; sinceMs: number }> = []
   private lastPhaseAt = performance.now()
 
@@ -131,8 +111,6 @@ class ConsoleTail {
     this.markers.serviceFailed ||= chunk.includes('__FKN_SERVICE_FAILED__')
   }
 
-  // True once the tail ends at a shell prompt, meaning the guest is waiting for
-  // input rather than still printing.
   atPrompt (): boolean {
     return /[#$]\s*$/.test(this.text.replace(/\r/g, '').trimEnd())
   }
@@ -144,9 +122,6 @@ class ConsoleTail {
 
 type BrowserConsoleTone = 'command' | 'comment' | 'route' | 'header' | 'success' | 'body' | 'error'
 
-// Which builder guest this page was pointed at. Also decides the platform base
-// images are pulled for: buildah executes RUN steps inside the guest, so an
-// amd64 rootfs in a riscv64 guest fails at the first instruction.
 let builderArch: BuilderArch = DEFAULT_BUILDER_ARCH
 
 const main = async (): Promise<void> => {
@@ -183,10 +158,6 @@ const main = async (): Promise<void> => {
     ? null
     : matchPreset(dockerfileText, publishSpec?.guestPort ?? null)
 
-  // Which engine builds this, and therefore which guest has to boot. Deciding
-  // here rather than after boot is the point: buildah's guest is three times the
-  // download and boots roughly six times slower, so a Dockerfile the fast path
-  // can handle should never wait for it to arrive.
   const buildPlan = (preset || dockerfileText === null) ? null : planBuild(dockerfileText)
   const guest = GUESTS[buildPlan?.engine === 'chroot' ? 'runner' : 'builder'][builderArch]
 
@@ -267,8 +238,7 @@ const main = async (): Promise<void> => {
   terminal.loadAddon(fitAddon)
   fitAddon.fit()
   fitAddon.observeResize()
-  // The addon drops observer events during its short resize lock, so refit once
-  // after the service layout has settled or the bottom rows stay clipped.
+  // The addon drops observer events during its short resize lock, so refit once or the bottom rows stay clipped.
   setTimeout(() => fitAddon.fit(), 75)
   mark('terminal-ready')
 
@@ -278,27 +248,18 @@ const main = async (): Promise<void> => {
         const requested = query.get(QUERY_PARAMS.wasmUrl)
         const legacyId = query.get(QUERY_PARAMS.wasm)
         if (requested) {
-          // A preset URL with an edited Dockerfile means the source no longer
-          // matches the dedicated runtime, so fall through to whichever guest
-          // the plan chose rather than booting a runtime for the wrong image.
-          // Any other explicit URL is honoured, which is how a specific artifact
-          // gets tested.
+          // A preset URL with an edited Dockerfile no longer matches the dedicated runtime, so use the plan's guest.
           return isPresetWasmURL(requested)
             ? resolveAsset(guest.wasmPath)
             : new URL(requested, location.href).toString()
         }
         if (legacyId) return new URL('/wasm/' + legacyId + '/out.wasm', location.href).toString()
-        // A Dockerfile with no explicit artifact: the plan already decided which
-        // guest can build it, and that is the one to boot.
         if (buildPlan) return resolveAsset(guest.wasmPath)
         return resolveAsset('/out.wasm')
       })()
 
-  // The builder guest fetches base images and its generated script from here.
   const artifacts: ArtifactCache = new Map()
   const tail = new ConsoleTail()
-  // Readable from the page for diagnostics: the terminal itself renders to a
-  // canvas, so without this there is no way to see what the guest last said.
   ;(window as typeof window & {
     dockerWasmConsole?: () => string
     dockerWasmPhases?: () => Array<{ label: string; atMs: number; sinceMs: number }>
@@ -381,7 +342,7 @@ const main = async (): Promise<void> => {
         try {
           expression = 'await response.json()'
           rendered = JSON.stringify(JSON.parse(body), null, 2)
-        } catch { /* not valid JSON after all */ }
+        } catch {}
       }
       writeConsole('>', expression, 'command')
       writeConsole('<', rendered, 'body')
@@ -401,8 +362,6 @@ const main = async (): Promise<void> => {
 
   if (serviceProbe) serviceProbe.addEventListener('click', () => { void sendRequest() })
 
-  // Watches the console tail for a marker the generated script printed, or for
-  // the shell settling at a prompt.
   const watch = (check: () => boolean, onHit: () => void, intervalMs = 400): void => {
     const timer = setInterval(() => {
       if (!check()) return
@@ -411,7 +370,6 @@ const main = async (): Promise<void> => {
     }, intervalMs)
   }
 
-  // A built-in example is a complete image: no registry pull, no Buildah.
   if (preset) {
     mark('preset-runtime-started')
     if (serviceMode) {
@@ -431,7 +389,6 @@ const main = async (): Promise<void> => {
     return
   }
 
-  // No Dockerfile at all: a bare guest with a shell.
   if (dockerfileText === null || dockerfileB64 === null) {
     watch(() => tail.atPrompt(), () => {
       mark('guest-shell-ready')
@@ -468,19 +425,12 @@ const main = async (): Promise<void> => {
   })
 }
 
-// Builds without buildah: the page pulls the base image's layers, offers them
-// over the same gateway the builder used for its docker-archive, and the guest
-// untars them and chroots in. That removes the two phases that dominated the old
-// path (55s loading the archive into buildah's store, 33s committing a layer),
-// neither of which produced anything this page consumed.
 const runChrootBuild = async (context: {
   container: Container
   artifacts: ArtifactCache
   tail: ConsoleTail
   plan: ChrootPlan
   platform: { os: string; arch: string }
-  // The image this guest was converted from, when it is one a Dockerfile can
-  // name, and that image's own config, which an in-place build never pulls.
   guestBaseImage?: string
   guestBaseImageConfig?: ImageDefaults
   publishSpec: PublishSpec | null
@@ -492,17 +442,11 @@ const runChrootBuild = async (context: {
 }): Promise<void> => {
   const { container, artifacts, tail, plan, platform, serviceMode, watch, sendRequest } = context
 
-  // The guest was converted from an image of its own. When the Dockerfile asks
-  // for that same image, the base is already here: no pull, no transfer through
-  // the artifact bridge, no extraction. That matters more than anything else in
-  // this path, because the transfer is its dominant cost (measured at 317s for
-  // 3.4MB on riscv64, against under a second for the build steps).
+  // Skipping the transfer is the whole point: it dominates a build at 3.4 MB through the artifact bridge measured at 317s on riscv64, against under a second for the build steps.
   const inPlace = context.guestBaseImage !== undefined &&
     sameImage(plan.base, context.guestBaseImage)
 
   let layers: LayerRef[] = []
-  // Everything the Dockerfile leaves unset comes from here. An in-place build
-  // never pulls the image, so its config travels with the guest instead.
   let imageDefaults: ImageDefaults = context.guestBaseImageConfig ?? {}
 
   if (inPlace) {
@@ -533,17 +477,12 @@ const runChrootBuild = async (context: {
       cmd: rootfs.config.Cmd,
     }
 
-    // Overlay deletions are resolved here, with the layers still separate, and
-    // travel to the guest as explicit paths. Reading tar headers with the
-    // platform's own gzip costs milliseconds; there is no equivalent the guest
-    // could do after extraction, because by then the layers are one directory.
+    // Overlay deletions must be resolved here, with the layers still separate: after extraction they are one directory.
     const ops = await scanLayers(rootfs.layers).catch((error: unknown) => {
       console.warn('[layers] scan failed, extracting without deletions: ' + String(error))
       return [] as LayerOps[]
     })
 
-    // Each layer becomes its own artifact key so the guest fetches them one at a
-    // time, rather than materialising a combined archive on either side.
     layers = rootfs.layers.map((bytes, index) => {
       const key = '__fkn_layer_' + index + '__'
       artifacts.set(key, { promise: null, bytes })
@@ -563,8 +502,6 @@ const runChrootBuild = async (context: {
   const scriptRef = '__fkn_runtime_build_script__'
   artifacts.set(scriptRef, { promise: null, bytes: new TextEncoder().encode(script) })
 
-  // Wait for a prompt before typing, the same as the buildah path: the guest is
-  // not listening until its shell is.
   watch(() => tail.atPrompt(), () => {
     mark('guest-shell-ready')
     container.write(
@@ -608,9 +545,6 @@ type BuilderContext = {
   watch: (check: () => boolean, onHit: () => void, intervalMs?: number) => void
 }
 
-// Builds an edited Dockerfile inside the guest with Buildah. The base images are
-// pulled here, in the page, and served to the guest over its local gateway,
-// because the guest has no registry credentials and no CORS exemption.
 const runBuilder = async (context: BuilderContext): Promise<void> => {
   const {
     container, artifacts, tail, terminal, dockerfileText, dockerfileB64,
@@ -630,8 +564,6 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
     if (instruction) instructions.push(instruction)
     return instruction !== undefined
   })
-  // A Dockerfile that adds no layers can run Buildah's own working container
-  // instead of creating a second one from the finished image.
   const reuseBuildContainer = parsed && instructions.join(',') === 'FROM,EXPOSE,CMD'
 
   if (refs.length === 0) mark('base-images-ready')
@@ -673,10 +605,6 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
   for (const ref of refs) {
     const encoded = encodeURIComponent(ref)
     const safe = ref.replace(/[^A-Za-z0-9._-]/g, '_')
-    // Each phase announces itself. Without this the guest is silent from the
-    // moment the script starts until buildah prints its first step, which is
-    // minutes of a progress view having nothing to say and no way to tell a slow
-    // transfer from a hung one.
     loadBlock +=
       '__phase "fetch ' + ref + '"\n' +
       "wget -q 'http://192.168.127.1:9090/img/" + encoded + "' -O /tmp/" + safe + ".tar || { echo wget-failed; exit 1; }\n" +
@@ -686,13 +614,7 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
       'rm -f /tmp/' + safe + '.tar\n'
   }
 
-  // Every phase marker carries seconds since the script started. The page parses
-  // these into the progress view, and they are also the only way to see which
-  // part of a slow build is actually slow: the guest is otherwise silent for
-  // minutes at a stretch and one long pause looks like any other.
-  // The build runs in a `sh -eu` heredoc, so its shell functions do not exist in
-  // the outer script. Both define __phase; only the outer one sets the clock, and
-  // exports it so the inner one continues the same timeline rather than restarting.
+  // The build runs in a `sh -eu` heredoc, so both scripts define __phase; only the outer one sets and exports the clock.
   const phaseHelper =
     '__phase() { echo "== $1 +$(( $(date +%s) - ${__t0:-0} ))s =="; }\n'
 
@@ -775,8 +697,7 @@ const runBuilder = async (context: BuilderContext): Promise<void> => {
     '  echo __FKN_BUILD_"FAILED"__\n' +
     'fi\n'
 
-  // The script goes through the artifact bridge rather than the console: a
-  // multi-kilobyte paste would exceed the PTY's input buffer.
+  // The script goes through the artifact bridge rather than the console: a multi-kilobyte paste exceeds the PTY buffer.
   const scriptRef = '__fkn_runtime_build_script__'
   artifacts.set(scriptRef, { promise: null, bytes: new TextEncoder().encode(script) })
   const launcher = "if wget -q 'http://192.168.127.1:9090/img/" + encodeURIComponent(scriptRef) +

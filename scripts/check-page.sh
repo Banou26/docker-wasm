@@ -1,25 +1,11 @@
 #!/usr/bin/env bash
-#
-# Drives the real page in a real browser: picks a guest from the build plan,
-# boots it, runs a build, and checks what the built image contains.
-#
-# This needs a chromium with a debugging port open, and it attaches to one that
-# is already running rather than launching its own, for two reasons. A headless
-# chromium stalls on the in-page gateway fetch, which has twice looked like a bug
-# in this project and twice been the harness. And on this machine a second
-# chromium hands off to the first instead of starting, so launching is not
-# available anyway.
-#
-#   npm run dev-web                     # the page under test, on :1234
-#   npm run check-page
-#
-# Point it somewhere else with ORIGIN, or at a specific browser with CDP.
 
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 origin="${ORIGIN:-http://localhost:1234}"
 
+# attaches to an already-running chromium rather than launching one, because on this machine a second chromium hands off to the first instead of starting
 if [ -z "${CDP:-}" ]; then
     port=$(pgrep -af -- '--remote-debugging-port=' 2>/dev/null \
         | grep -o -- '--remote-debugging-port=[0-9]\+' \
@@ -42,8 +28,6 @@ echo "browser: $CDP"
 echo "origin:  $origin"
 
 failed=0
-# single: the editor page, which is where a reader actually starts.
-# build:  the runtime entry on its own, which shared links and the library use.
 for check in single build; do
     echo
     echo "########## $check"

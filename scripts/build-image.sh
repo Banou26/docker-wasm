@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-# Build the alpine+curl browser E2E: container wasm, netstack proxy, bundle.
-#
-# Requirements (a normal dev box with internet):
-#   - Docker with working network *inside build containers*
-#   - Go >= 1.23
-#   - c2w on PATH (build from github.com/container2wasm/container2wasm)
-#   - node + npm
-#
-# Output: ./build/ (vite output) - serve cross-origin-isolated via scripts/serve.cjs.
-#
-# Env vars:
-#   FKN_API   override the @fkn/lib iframe URL baked into the bundle.
-#             default https://fkn.app/api (prod, needs auth to expose its API).
-#             For a fully local stack (recommended for testing):
-#               FKN_API="http://127.0.0.1:1234/api.html"
-#             alongside:  ~/dev/fkn/webvpn  (Rust WebTransport server)
-#                         ~/dev/fkn/web    (vite dev w/ VITE_WEBVPN_{ORIGIN,CERT_HASH})
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +22,7 @@ echo "==> 3/6  build the c2w-webvpn netstack proxy"
 echo "==> 4/6  fetch upstream wasi-browser worker assets"
 src="$public/_c2w_src"
 [ -d "$src" ] || git clone --depth 1 https://github.com/container2wasm/container2wasm "$src"
-# Only copy upstream files we don't author. Our overlay sources live in src/.
+# only copy upstream files we don't author; our overlay sources live in src/
 for f in browser_wasi_shim stack-worker.js wasi-util.js worker-util.js ws-delegate.js; do
     if [ -d "$src/examples/wasi-browser/htdocs/$f" ]; then
         cp -R "$src/examples/wasi-browser/htdocs/$f" "$public/"
@@ -47,8 +30,7 @@ for f in browser_wasi_shim stack-worker.js wasi-util.js worker-util.js ws-delega
         cp "$src/examples/wasi-browser/htdocs/$f" "$public/"
     fi
 done
-# c2w-net-proxy.wasm (the "browser" netstack mode - playground uses webvpn,
-# but we keep it for completeness).
+# the "browser" netstack mode: unused by the playground, which is on webvpn, but kept for completeness
 if [ -f "$src/examples/wasi-browser/htdocs/c2w-net-proxy.wasm" ]; then
     cp "$src/examples/wasi-browser/htdocs/c2w-net-proxy.wasm" "$public/"
 fi

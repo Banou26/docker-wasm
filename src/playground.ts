@@ -54,12 +54,6 @@ const warmPresetRuntime = (mode: DemoMode = demoMode): void => {
   })
 }
 
-// Start the guest download while the reader is still typing.
-//
-// It is between 15 and 49 MB depending on which guest the plan needs, and
-// nothing about it depends on the Dockerfile being finished, so waiting for the
-// button costs the whole download. Repeated calls for the same artifact are one
-// request: the URL is versioned and the response is cached.
 const warmed = new Set<string>()
 const warmGuest = (guest: Builder): void => {
   const url = withWasmAssetVersion(guest.wasmPath)
@@ -98,8 +92,7 @@ const updateEditor = (): void => {
   try {
     launch = source ? planLaunch({ dockerfile: pasteBox.value, mode: demoMode }) : null
   } catch {
-    // A half-typed Dockerfile is the normal state of this box, not an error to
-    // report. The outlook simply has nothing to say until it parses.
+    // A half-typed Dockerfile is the normal state of this box, not an error to report.
   }
   if (buildOutlook) {
     buildOutlook.textContent = launch
@@ -110,8 +103,6 @@ const updateEditor = (): void => {
     buildOutlook.hidden = !launch
   }
 
-  // Settled, not per keystroke: the plan can flip between guests mid-edit, and
-  // each guest is tens of megabytes.
   clearTimeout(warmTimer)
   if (launch && !launch.preset) {
     const { guest } = launch
@@ -191,13 +182,7 @@ for (const button of modeButtons) {
   button.addEventListener('click', () => selectDemoMode(mode))
 }
 
-// The runtime boots into this page rather than another one.
-//
-// Navigating away threw out the guest download the editor had just warmed, and
-// gave the reader a blank page while it started over. `main.ts` reads its
-// configuration from the URL, so the URL is rewritten in place first and the
-// module imported second; the runtime cannot tell the difference, and a reload
-// or a shared link still lands on a build.
+// `main.ts` reads its configuration from the URL, so the URL is rewritten in place first and the module imported second.
 let started = false
 
 const startBuild = async (launchUrl: string): Promise<void> => {
@@ -213,9 +198,7 @@ const startBuild = async (launchUrl: string): Promise<void> => {
 
   const [{ mountBuildView }] = await Promise.all([import('./build-view'), Promise.resolve()])
   if (buildView) mountBuildView(buildView)
-  // Imported last, so the view is subscribed before the first event. Late
-  // subscribers get the history replayed anyway, but not depending on that keeps
-  // the ordering obvious.
+  // Imported last, so the view is subscribed before the first event.
   await import('./main')
 }
 
@@ -232,9 +215,6 @@ const run = (): void => {
   void startBuild(launch.url)
 }
 
-// A reload, or somebody else's link, arrives with the Dockerfile already in the
-// hash. Go straight to the build rather than showing an editor the reader did
-// not ask for and dropping what they were sent.
 const resumeFromURL = (): void => {
   const hash = location.hash
   if (!hash.includes(HASH_KEY_DOCKERFILE + '=')) return
@@ -257,9 +237,6 @@ pasteBox.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') run()
 })
 
-// A running guest owns workers, a network stack and a terminal, and there is no
-// supported way to hand it back. Reloading is the honest way back to the editor,
-// and it also clears the Dockerfile out of the URL.
 buildBack?.addEventListener('click', () => {
   location.assign(location.pathname)
 })

@@ -1,11 +1,3 @@
-// Precompresses the converted images.
-//
-// These are the largest thing a visitor downloads, so the encoding matters more
-// than anywhere else in the build. Brotli takes the riscv64 demo image from
-// 54 MB to 16 MB, where gzip leaves it at 26 MB. Both are written: the R2
-// publication uploads the brotli object, and the gzip one stays available for
-// anything that cannot negotiate brotli.
-
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
@@ -18,8 +10,7 @@ const encodings = [
     {
         extension: '.br',
         label: 'brotli',
-        // Quality 9 rather than 11: on a 54 MB artifact the last two levels
-        // cost minutes of build time for a couple of percent.
+        // quality 9 rather than 11: on a 54 MB artifact the last two levels cost minutes for a couple of percent
         stream: (size) => zlib.createBrotliCompress({
             params: {
                 [zlib.constants.BROTLI_PARAM_QUALITY]: 9,
@@ -51,7 +42,7 @@ async function compress (file, encoding, sourceStat) {
     try {
         const outputStat = await fsp.stat(output)
         if (outputStat.mtimeMs >= sourceStat.mtimeMs && outputStat.size > 0) return
-    } catch { /* not compressed yet */ }
+    } catch {}
 
     const temporary = output + '.tmp'
     await fsp.rm(temporary, { force: true })

@@ -10,9 +10,7 @@ if (bytes.length < 10 * 1024 * 1024) {
 
 const wasmModule = new WebAssembly.Module(bytes)
 const exportNames = new Set(WebAssembly.Module.exports(wasmModule).map((entry) => entry.name))
-// The runtime drives the module through WASI alone, so only the entry point and
-// the memory are required. Asyncify exports are specific to the Bochs build and
-// absent from the TinyEMU one.
+// Asyncify exports are specific to the Bochs build and absent from the TinyEMU one.
 for (const name of ['memory', '_start']) {
     if (!exportNames.has(name)) throw new Error(file + ' is missing c2w export ' + name)
 }

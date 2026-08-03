@@ -1,21 +1,6 @@
 #!/bin/sh
-# Runs INSIDE the builder guest. Packages the built OCI image into rootfs.bin -
-# the Rock-Ridge ISO disk that the runtime emulator mounts and whose /oci tree
-# its init runc-runs.
-#
-# Inputs : /out/image    - OCI layout from build-image.sh
-#          $VM_ROOTFS    - the FIXED c2w VM userland (busybox/runc/init/tini/…).
-#                          Built once and baked into this builder guest; it does
-#                          NOT change per build - only the container rootfs +
-#                          spec do.
-# Output : /out/rootfs.bin
-#
-# c2w on-disk layout (mirrors container2wasm's embedded Dockerfile):
-#   <iso>/oci/rootfs          container rootfs (overlayfs lowerdir at runtime)
-#   <iso>/oci/image.json      OCI image config (used by init)
-#   <iso>/oci/spec.json       OCI runtime spec (used by init -> runc)
-#   <iso>/oci/initconfig.json init boot config
-#   <iso>/sbin/init, /sbin/runc, busybox, …   from $VM_ROOTFS
+# Runs INSIDE the builder guest. The ISO layout mirrors container2wasm's embedded Dockerfile:
+# <iso>/oci/{rootfs,image.json,spec.json,initconfig.json} plus $VM_ROOTFS overlaid at the root.
 set -eu
 
 : "${OCI_LAYOUT:=/out/image}"
@@ -27,8 +12,7 @@ pack="$(mktemp -d)"
 mkdir -p "$pack/oci/rootfs"
 
 echo ">> create-spec: unpack image + generate spec/init config"
-# create-spec writes image.json/spec.json/initconfig.json to the CWD and
-# unpacks the image layers into the rootfs argument.
+# create-spec writes image.json/spec.json/initconfig.json to the CWD, hence the subshell
 ( cd "$pack/oci" && create-spec --rootfs-path=/oci/rootfs "$OCI_LAYOUT" "$PLATFORM" "$pack/oci/rootfs" )
 
 echo ">> overlay the fixed VM userland"

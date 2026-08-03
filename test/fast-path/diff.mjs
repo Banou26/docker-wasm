@@ -1,14 +1,5 @@
-// Differential check: the same Dockerfile through `docker build` and through the
-// fast path, comparing what a RUN step actually sees.
-//
-// This is the only check that can settle the questions the fast path gets wrong
-// in ways that produce a working build rather than a failing one. Asserting the
-// generated text says nothing about whether the shell does with it what docker
-// would; running both and diffing does.
-//
-// The fast path runs here in its in-place mode, which is the same script the
-// guest runs when the base image is the guest, with the container standing in
-// for the guest. chroot mode is covered by chroot.mjs.
+// Differential check: the same Dockerfile through `docker build` and through the fast path, which is
+// the only way to catch the failures that produce a working build rather than a failing one.
 
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -20,8 +11,7 @@ const BASE = 'alpine:3.21'
 let failures = 0
 let ran = 0
 
-// buildkit writes its build log to stderr, so both streams matter and the
-// probes can land on either.
+// buildkit writes its build log to stderr, so the probes can land on either stream
 const run = (file, args, opts = {}) => {
   const result = spawnSync(file, args, { encoding: 'utf8', maxBuffer: 1 << 26, ...opts })
   if (result.error) throw result.error
@@ -37,7 +27,6 @@ const sh = (file, args, opts = {}) => {
   return output
 }
 
-// The base image config, exactly the fields pullRootfs hands the emitter.
 const imageDefaults = (() => {
   const raw = sh('docker', ['inspect', '--format', '{{json .Config}}', BASE])
   const config = JSON.parse(raw)
@@ -49,8 +38,7 @@ const imageDefaults = (() => {
   }
 })()
 
-// Both sides echo the command they are about to run, so the format string
-// itself shows up as a match. Only what the command printed is evidence.
+// both sides echo the command before running it, so the format string itself shows up as a match
 const probes = (text) =>
   (text.match(/PROBE\d*<[^>]*>/g) ?? []).filter((probe) => !probe.endsWith('<%s>'))
 
@@ -122,8 +110,6 @@ const compare = (label, body) => {
 
 const P = (n, value) => "printf 'PROBE" + n + "<%s>\\n' " + value
 
-// --- ordering --------------------------------------------------------------
-
 compare('ENV is positional', [
   'ENV V=1',
   'RUN ' + P(1, '"$V"'),
@@ -146,8 +132,6 @@ compare('WORKDIR is positional', [
   'RUN ' + P(2, '"$(pwd)"'),
   '',
 ].join('\n'))
-
-// --- working directory -----------------------------------------------------
 
 compare('WORKDIR creates a directory the base image does not have', [
   'WORKDIR /app/nested',
@@ -177,8 +161,6 @@ compare('a WORKDIR built from a variable', [
   'RUN ' + P(1, '"$(pwd)"'),
   '',
 ].join('\n'))
-
-// --- environment -----------------------------------------------------------
 
 compare('the base image PATH is in effect', ['RUN ' + P(1, '"$PATH"'), ''].join('\n'))
 
@@ -234,8 +216,6 @@ compare('an ENV set after a RUN still applies to the launched process', [
   '',
 ].join('\n'))
 
-// --- filesystem ------------------------------------------------------------
-
 compare('a RUN writes where the following RUN reads', [
   'RUN echo written > /built.txt',
   'RUN ' + P(1, '"$(cat /built.txt)"'),
@@ -246,8 +226,6 @@ compare('/dev/null discards rather than accumulating', [
   'RUN echo junk > /dev/null && ' + P(1, '"$(wc -c < /dev/null)"'),
   '',
 ].join('\n'))
-
-// --- parsing ---------------------------------------------------------------
 
 compare('a continued RUN is one command', [
   'RUN X=$(echo a \\',

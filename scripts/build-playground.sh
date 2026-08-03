@@ -1,20 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Converts the in-browser Dockerfile builder into a wasm artifact, once per target
-# architecture.
-#
-#   ./scripts/build-playground.sh              # both
-#   ./scripts/build-playground.sh riscv64      # just the fast one
-#
-# riscv64 runs on c2w's TinyEMU backend: no asyncify instrumentation, a much
-# smaller artifact, and the throughput that makes building in a tab bearable. It
-# can only build base images that have a riscv64 variant, so amd64 stays as the
-# compatibility path on Bochs and the page picks between them per Dockerfile.
-#
-# VM_MEMORY_SIZE_MB=512 is required for both: buildah's chroot-isolation RUN
-# spawns a subprocess that OOMs at the default 128 MB.
-
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
 context="$repo/src/app/dockerfile-playground"
@@ -26,9 +12,6 @@ temporary="$(mktemp -d)"
 assets="$temporary/container2wasm"
 trap 'rm -rf "$temporary"' EXIT
 
-# Each target is <guest>:<arch>. `runner` is the fast path (busybox extracting a
-# rootfs and chrooting into it); `builder` carries buildah for Dockerfiles the
-# fast path cannot express.
 targets=("$@")
 [[ ${#targets[@]} -gt 0 ]] || targets=(runner:riscv64 runner:amd64 builder:riscv64 builder:amd64)
 
@@ -39,18 +22,17 @@ c2w_commit="$(git -C "$assets" rev-parse HEAD)"
     echo "$c2w_version resolved to unexpected commit $c2w_commit" >&2
     exit 1
 }
-# Grants CAP_SYS_ADMIN and mounts a tmpfs at the graphroot, so buildah gets a
-# native overlay rather than stacking one on the guest's overlay-backed root.
-# Touches only cmd/create-spec, so it applies to either architecture.
+# grants CAP_SYS_ADMIN and mounts a tmpfs at the graphroot, so buildah gets a native overlay
+# rather than stacking one on the guest's overlay-backed root; touches only cmd/create-spec, so one apply covers either architecture
 git -C "$assets" apply "$here/c2w-overlay-storage.patch"
 (cd "$assets" && go build -trimpath -o "$temporary/c2w" ./cmd/c2w)
 
 mkdir -p "$output_dir"
 
 for target in "${targets[@]}"; do
-    # Bare `riscv64`/`amd64` still mean the builder, so existing invocations keep working.
     guest="${target%%:*}"
     arch="${target##*:}"
+    # a bare riscv64/amd64 target still means the builder guest, so existing invocations keep working; <guest>:<arch> is the newer form
     [[ "$target" == *:* ]] || { guest=builder; arch="$target"; }
 
     case "$guest:$arch" in
@@ -72,11 +54,9 @@ for target in "${targets[@]}"; do
         exit 1
     }
 
-    # The builder needs 512 MB because buildah's chroot-isolation RUN spawns a
-    # subprocess that OOMs at the default 128. The runner has no such subprocess,
-    # but it does extract a whole base rootfs and then run the Dockerfile's RUN
-    # steps inside it, so give it headroom without paying the builder's.
+    # the builder needs 512 MB because buildah's chroot-isolation RUN spawns a subprocess that OOMs at the default 128
     memory=512
+    # the runner has no such subprocess, but it does extract a whole base rootfs and run the Dockerfile's RUN steps inside it, so it still needs headroom
     [[ "$guest" == runner ]] && memory=256
 
     echo "==> converting to $(basename "$out")"

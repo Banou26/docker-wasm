@@ -1,16 +1,8 @@
-// Main-thread half of the guest console.
-//
-// The guest is a blocked WASI program: every console read, write, and ioctl is
-// a SharedArrayBuffer round-trip it cannot proceed past. This host answers each
-// one and, for a read poll with no data pending, parks the reply until input
-// arrives or the guest's own timeout expires. Parking rather than busy-polling
-// is what keeps an idle container off the CPU.
+// Parking a read poll rather than busy-polling is what keeps an idle container off the CPU.
 
 import { TTY_BUFFER_BYTES, type TtyRequest } from './protocol'
 
-// Raw mode: the guest runs its own line discipline, so nothing is translated
-// or echoed on the way through. Matches the flags a terminal integration would
-// set with TCSETS immediately after boot.
+// Raw mode: the guest runs its own line discipline, so nothing is translated or echoed on the way through.
 const IMAXBEL = 8192
 const IUTF8 = 16384
 const ONLCR = 4
@@ -38,8 +30,7 @@ const defaultTermios = (): Termios => ({
   cc: DEFAULT_CC.slice(),
 })
 
-// xterm-pty's packing: four flag words, then the 32 control characters packed
-// one byte at a time starting at bit 8 of the fifth word.
+// xterm-pty's packing: four flag words, then the 32 control characters one byte at a time from bit 8 of the fifth word.
 const encodeTermios = (termios: Termios): number[] => {
   const out = [termios.iflag, termios.oflag, termios.cflag, termios.lflag]
   let word = 0
@@ -77,8 +68,6 @@ export type TtyHostOptions = {
   columns?: number
   rows?: number
   onOutput?: (bytes: Uint8Array) => void
-  // True when the guest has other work waiting, which makes a console poll
-  // return at once instead of parking. See `handle`.
   hasPendingWork?: () => boolean
 }
 
@@ -122,14 +111,6 @@ export class TtyHost {
     this.releasePoll(true)
   }
 
-  // Ends a parked console poll without any console input arriving.
-  //
-  // The guest polls stdin and its network socket in the same `poll_oneoff`, and
-  // it waits on the console first. Left alone it would sleep out the whole
-  // clock timeout before looking at the socket, which throttles the container's
-  // network to one packet per poll. The runtime calls this the moment frames
-  // are queued for the guest, so the call returns "no console input" and the
-  // guest goes straight on to read them.
   interrupt (): void {
     this.releasePoll(this.input.length > 0)
   }
@@ -175,12 +156,7 @@ export class TtyHost {
           this.payload[0] = this.input.length > 0 ? 1 : 0
           break
         }
-        // The guest polls its console and its network socket in one
-        // `poll_oneoff` and waits on the console first. If frames are already
-        // queued, parking here would sleep out the guest's whole clock timeout
-        // before it ever looks at them, which is one poll interval of delay per
-        // packet. Answering "no console input" immediately sends it straight to
-        // the socket.
+        // The guest waits on the console first in `poll_oneoff`, so parking with frames already queued costs one poll interval per packet.
         if (this.hasPendingWork()) {
           this.payload[0] = 0
           break

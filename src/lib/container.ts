@@ -1,10 +1,3 @@
-// The public runtime: start a converted container image in the page, publish
-// its TCP ports, and talk HTTP to it.
-//
-// Three actors, all started together so nothing waits in series: the guest
-// worker runs the emulated machine, the netstack worker terminates its IP
-// traffic, and this module owns the sockets, the console, and the HTTP client.
-
 import { FrameBridge } from './frame-bridge'
 import { HttpClient } from './http'
 import {
@@ -19,28 +12,18 @@ import { TtyHost } from './tty-host'
 export type ContainerImage = string | URL | ArrayBuffer | ArrayBufferView
 
 export type ContainerOptions = {
-  // The converted image, as a URL to a `.wasm` or its bytes. Build one with
-  // the Vite plugin or the `fkn-container` CLI.
   image: ContainerImage
-  // The network stack module. Defaults to the copy shipped with this package.
   netstackImage?: ContainerImage
-  // Guest TCP ports to publish. Each gets an in-process route the page can
-  // reach with `fetch`.
   ports?: number[]
-  // Set false for a container with no network at all.
   network?: boolean
-  // Terminal geometry reported to the guest.
   columns?: number
   rows?: number
-  // Console output, as it arrives.
   onLog?: (bytes: Uint8Array) => void
   onStatus?: (status: ContainerStatus) => void
-  // How long `fetch` keeps retrying while the guest is still starting up.
   startupGraceMs?: number
   connectTimeoutMs?: number
   responseTimeoutMs?: number
-  // Files offered to the guest over its local gateway. The Dockerfile builder
-  // image uses this; prebuilt images do not.
+  // Files the page offers to the guest over its local gateway. The Dockerfile builder image uses this; prebuilt images never touch it.
   artifacts?: ArtifactCache
   dnsResolver?: (query: Uint8Array) => Promise<Uint8Array>
 }
@@ -49,8 +32,6 @@ export type ContainerSource = 'guest' | 'netstack'
 
 export type ContainerStatus =
   | { phase: 'starting'; source?: ContainerSource }
-  // The response has started; with streaming compilation the download and the
-  // compile overlap, so `bytes` is the declared artifact size, not progress.
   | { phase: 'fetching'; source: ContainerSource; elapsedMs: number; bytes?: number }
   | { phase: 'compiled'; source: ContainerSource; elapsedMs: number; bytes?: number }
   | { phase: 'running'; source: ContainerSource; elapsedMs: number }
@@ -60,7 +41,6 @@ export type ContainerStatus =
 
 export type ContainerPort = {
   guestPort: number
-  // Address of the in-process route. Not reachable outside the page.
   host: string
   port: number
   origin: string
@@ -96,17 +76,11 @@ export class Container {
   private readonly onStatus: (status: ContainerStatus) => void
   private logListeners = new Set<(bytes: Uint8Array) => void>()
 
-  // Resolves once the guest is running and every published port is bound.
-  // `fetch` still absorbs the gap between that and the service accepting
-  // requests, so most callers do not need to await this.
   readonly ready: Promise<void>
 
   constructor (private options: ContainerOptions) {
     this.startupGraceMs = options.startupGraceMs ?? 90_000
     this.onStatus = options.onStatus ?? (() => {})
-    // The bridge and the console host are mutually aware: the console must not
-    // park while frames are queued for the guest, and it must be released the
-    // moment new ones arrive.
     const bridge = new FrameBridge(() => this.netstack, () => this.tty.interrupt())
     this.bridge = bridge
     this.tty = new TtyHost({
@@ -146,8 +120,7 @@ export class Container {
         onLog: (message) => console.debug('[fkn-container]', message),
       })
 
-      // Bind every published port before the guest boots, so a service that
-      // comes up instantly still has a route waiting for it.
+      // Bind every published port before the guest boots, so a service that comes up instantly still has a route waiting.
       const bound = await Promise.all(ports.map((port) => this.netstack!.listen(port)))
       for (const port of bound) this.published.set(port.guestPort, port)
 
@@ -233,8 +206,6 @@ export class Container {
     }))
   }
 
-  // Origin of the in-process route for a guest port. Defaults to the first
-  // published port.
   origin (guestPort?: number): string {
     const port = guestPort === undefined
       ? this.published.values().next().value
@@ -259,7 +230,6 @@ export class Container {
         url.port = String(target.port)
         return url
       }
-      // Already pointed at a published route.
       for (const port of this.published.values()) {
         if (url.hostname === port.host && Number(url.port) === port.port) return url
       }
@@ -268,11 +238,6 @@ export class Container {
     return new URL(raw, this.origin() + '/')
   }
 
-  // Same shape as `fetch`. A path resolves against the first published port; an
-  // absolute URL is matched by its port against the published set.
-  //
-  // While the guest is still starting, connection failures are retried until
-  // the startup grace elapses, so callers do not have to poll for readiness.
   async fetch (input: string | URL | Request, init?: RequestInit): Promise<Response> {
     if (this.failure) throw this.failure
     if (this.stopping) throw new Error('this container has been stopped')
@@ -299,7 +264,6 @@ export class Container {
     }
   }
 
-  // Console output from the guest, as a stream. Every reader gets its own.
   logs (): ReadableStream<Uint8Array> {
     let detach: (() => void) | null = null
     return new ReadableStream<Uint8Array>({
@@ -319,7 +283,6 @@ export class Container {
     return () => { this.logListeners.delete(listener) }
   }
 
-  // Writes to the guest console, as if typed.
   write (data: string | Uint8Array): void {
     this.tty.write(data)
   }

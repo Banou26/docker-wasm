@@ -1,9 +1,4 @@
-// Puts the network stack module where the library build can see it.
-//
-// src/lib/container.ts resolves the default with
-// `new URL('./c2w-webvpn-proxy.wasm', import.meta.url)`. Vite only turns that
-// into an emitted asset when the file is actually next to the source, so the
-// Go artifact is copied in before the build and stays gitignored.
+// Vite only turns src/lib/container.ts's `new URL('./c2w-webvpn-proxy.wasm', import.meta.url)` into an emitted asset when the file is actually next to the source.
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -13,9 +8,8 @@ const name = 'c2w-webvpn-proxy.wasm'
 const candidates = [path.join(root, 'dist', name), path.join(root, 'public', name)]
 const destination = path.join(root, 'src', 'lib', name)
 
+// Removed again after the library build: left in place it would also be emitted into the demo site's bundle, which passes its own copy explicitly.
 if (process.argv.includes('--clean')) {
-    // Removed again after the library build. Left in place, it would also be
-    // emitted into the demo site's bundle, which passes its own copy explicitly.
     fs.rmSync(destination, { force: true })
     console.log('removed src/lib/' + name)
     process.exit(0)

@@ -2,11 +2,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 
 const root = path.join(__dirname, '..', 'build')
-// Served from R2 through functions/wasm-assets, so they are dropped from the
-// Pages upload rather than shipped with it. Every one of them is well past the
-// per-file limit, which is what the size check below turns into a failed build
-// rather than a failed deploy: an artifact added to `public/` and not listed
-// here breaks the deploy, and the guest artifacts arrive one target at a time.
+// served from R2 through functions/wasm-assets: an artifact added to `public/` and not listed here breaks the deploy
 const externalArtifacts = [
     'out.wasm',
     'c2w-webvpn-proxy.wasm',
@@ -31,10 +27,7 @@ async function files(dir) {
     return result
 }
 
-// The workers pull the WASI shim in purely for the globals it installs, so a
-// build that tree-shakes it produces a site that looks fine and fails at the
-// first container start. That happened once, from a blanket
-// "sideEffects": false. Fail the build instead of shipping it again.
+// the workers pull the WASI shim in purely for the globals it installs, so a build that tree-shakes it fails at the first container start
 async function assertWorkerShims(all) {
     const workers = all.filter((file) => /\/assets\/(guest|netstack)\.worker-[^/]+\.js$/.test(file))
     if (workers.length !== 2) {

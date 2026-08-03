@@ -1,7 +1,5 @@
 // Package netstack is the in-browser gVisor network stack for container2wasm,
-// with the outbound dial left pluggable. main.go (wasip1) injects the @webvpn
-// dialer; tests inject net.Dial. This is the only thing that differs from
-// upstream c2w-net-proxy - see the package README.
+// with the outbound dial left pluggable - the only thing that differs from upstream c2w-net-proxy.
 package netstack
 
 import (
@@ -41,50 +39,34 @@ const (
 	nicID         = 1
 	linkLocalCIDR = "169.254.0.0/16"
 
-	// UDP flows are reaped after this idle period (mirrors gvisor-tap-vsock's
-	// internal, unexported UDPConnTrackTimeout).
+	// Mirrors gvisor-tap-vsock's internal, unexported UDPConnTrackTimeout.
 	udpConnTrackTimeout = 90 * time.Second
 )
 
-// DialFunc dials the real destination of a terminated flow. In the browser
-// build this routes through @webvpn; in tests it's net.Dial.
 type DialFunc func(network, address string) (net.Conn, error)
 
-// ResolveDNSFunc takes a raw DNS query (wire format) and returns the raw DNS
-// response. In the browser this is plumbed through @fkn/lib's serverProxyFetch
-// to a DoH endpoint - much faster than tunnelling a fresh @webvpn UDP socket
-// per query. Optional; if nil, the gateway:53 forwarder falls back to
-// dialing UpstreamDNS via Dial("udp", …).
 type ResolveDNSFunc func(query []byte) ([]byte, error)
 
-// ImagePuller streams an in-browser-pulled docker-archive tar to the guest via
-// a gateway HTTP server (default :9090). JS side runs the OCI Registry V2
-// client (via @fkn/lib's serverProxyFetch) and stashes the resulting bytes per
-// ref; we just byte-pump through the netstack to whatever runs in the guest
-// (e.g. `wget http://192.168.127.1:9090/img/<ref>` piped to buildah pull).
 type ImagePuller interface {
 	Size(ref string) (int, error)
 	Chunk(ref string, offset int, buf []byte) (int, error)
 }
 
-// ImageHTTPPort is the gateway port the image-streaming server listens on.
 const (
 	ImageHTTPPort  = 9090
 	imageChunkSize = 64 * 1024
 )
 
-// Config configures the network stack.
 type Config struct {
 	Debug       bool
-	Dial        DialFunc // required
-	UpstreamDNS string   // e.g. "1.1.1.1:53"; if empty DNS forwarding is disabled
+	Dial        DialFunc
+	UpstreamDNS string
 	ResolveDNS  ResolveDNSFunc
 	ImagePuller ImagePuller
 	GuestIP     string
 	PollIngress PollIngressFunc
 }
 
-// Network is an assembled stack ready to serve a guest connection.
 type Network struct {
 	stack       *stack.Stack
 	sw          *gvntap.Switch
@@ -93,9 +75,6 @@ type Network struct {
 	guestIP     string
 }
 
-// New assembles the gVisor stack + tap switch from gvisor-tap-vsock's exported
-// building blocks (mirrors virtualnetwork.New/createStack) and installs the
-// dial-pluggable TCP/UDP forwarders plus a gateway DNS forwarder.
 func New(cfg Config) (*Network, error) {
 	if cfg.Dial == nil {
 		return nil, errors.New("netstack: Config.Dial is required")
@@ -157,10 +136,7 @@ func New(cfg Config) (*Network, error) {
 		guestIP:     cfg.GuestIP,
 	}
 
-	// DHCP hands the guest its address + points its resolver at the gateway.
-	// The gvisor-tap-vsock dhcp service only compiles for wasip1 (its dhcp
-	// dependency is patched for wasm), so it's behind a build tag; the native
-	// test build uses a no-op and a statically-addressed guest.
+	// The gvisor-tap-vsock dhcp service only compiles for wasip1, so it's behind a build tag.
 	if err := n.startDHCP(cfg); err != nil {
 		return nil, fmt.Errorf("dhcp: %w", err)
 	}
@@ -180,10 +156,8 @@ func New(cfg Config) (*Network, error) {
 	return n, nil
 }
 
-// Stack exposes the underlying gVisor stack (used by tests).
 func (n *Network) Stack() *stack.Stack { return n.stack }
 
-// Serve reads QEMU-protocol ethernet frames from conn until it closes.
 func (n *Network) Serve(ctx context.Context, conn net.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -250,8 +224,6 @@ func udpForwarder(s *stack.Stack, dial DialFunc) *udp.Forwarder {
 	})
 }
 
-// serveDNS binds UDP on the gateway's port 53 and relays each query out through
-// dial to upstream (the guest's resolver is pointed at the gateway by DHCP).
 func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFunc) error {
 	conn, err := gonet.DialUDP(n.stack, &tcpip.FullAddress{
 		NIC:  nicID,
@@ -271,8 +243,6 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 			}
 			query := append([]byte(nil), buf[:nb]...)
 			go func(query []byte, from net.Addr) {
-				// Preferred path: hand bytes to the host's DoH (no per-query
-				// UDP socket through @webvpn).
 				if resolve != nil {
 					resp, err := resolve(query)
 					if err == nil && len(resp) > 0 {
@@ -285,7 +255,6 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 					if err != nil {
 						log.Printf("dns: host resolver failed: %v", err)
 					}
-					// fall through to UDP dial if DoH fails and we have one.
 					if upstream == "" {
 						return
 					}
@@ -317,10 +286,6 @@ func (n *Network) serveDNS(dial DialFunc, upstream string, resolve ResolveDNSFun
 	return nil
 }
 
-// serveImageHTTP listens on the gateway's port (default 9090) and serves
-// `/img/<ref>` by pulling sized chunks from puller. The guest's auto-paste
-// script does `wget http://192.168.127.1:9090/img/<ref>` to drop the
-// docker-archive tar into /tmp before `buildah pull docker-archive:`.
 func (n *Network) serveImageHTTP(puller ImagePuller) error {
 	l, err := gonet.ListenTCP(n.stack, tcpip.FullAddress{
 		NIC:  nicID,

@@ -1,15 +1,5 @@
-// HTTP/1.1 over the in-process TCP route into the container.
-//
-// The container is reachable through an FKN loopback listener, not through the
-// browser's network stack, so `fetch` cannot address it. This is a small client
-// that speaks HTTP/1.1 on those sockets and hands back a real `Response`, body
-// streamed rather than buffered.
-//
-// Connections are pooled and reused. A server that closes an idle keep-alive
-// connection races every client that tries to reuse it, so a request that dies
-// before a single response byte arrives is retried once on a fresh socket. That
-// retry is what makes repeated calls to a one-connection-at-a-time server, the
-// shape most small container services have, behave predictably.
+// A server that closes an idle keep-alive connection races every client that reuses it, so a pooled
+// request that dies before a single response byte arrives is retried once on a fresh socket.
 
 import './node-globals'
 import { connect } from '@fkn/lib/net'
@@ -38,8 +28,6 @@ const indexOfSequence = (haystack: Uint8Array, needle: Uint8Array, from: number)
   return -1
 }
 
-// A socket with an awaitable read queue. The transport is event based; the
-// parser below wants to pull.
 class Connection {
   private chunks: Uint8Array[] = []
   private pending = 0
@@ -113,7 +101,6 @@ class Connection {
 
   get buffered (): number { return this.pending }
 
-  // Resolves with the next available bytes, or null once the peer is done.
   async read (timeoutMs: number, signal?: AbortSignal): Promise<Uint8Array | null> {
     while (this.pending === 0) {
       if (this.failure) throw new HttpError('the container connection failed', this.failure)
@@ -190,8 +177,7 @@ class Pool {
     }
     const key = Pool.key(connection.endpoint)
     const bucket = this.idle.get(key) ?? []
-    // One idle socket per endpoint. Small container services usually accept a
-    // single connection at a time, so hoarding sockets only stalls the guest.
+    // One idle socket per endpoint: small container services usually accept a single connection at a time.
     if (bucket.length >= 1) {
       connection.destroy()
       return
@@ -350,7 +336,7 @@ const bodyStream = (
         const chunk = await pull()
         if (chunk === null) {
           controller.close()
-          onDone(false)   // framing was the close itself
+          onDone(false)
           return
         }
         controller.enqueue(chunk)
@@ -359,8 +345,6 @@ const bodyStream = (
     })
   }
 
-  // Chunked. Sizes arrive as hex lines; a zero-length chunk ends the body and
-  // is followed by optional trailers.
   let buffer = new Uint8Array(0)
   let finished = false
   const append = (chunk: Uint8Array): void => {
@@ -504,7 +488,6 @@ export class HttpClient {
     }
 
     let parsed = await readHead(connection, this.responseTimeoutMs, request.signal)
-    // 1xx responses are informational; the real one follows on the same socket.
     while (parsed.status >= 100 && parsed.status < 200) {
       connection.unread(parsed.rest)
       parsed = await readHead(connection, this.responseTimeoutMs, request.signal)

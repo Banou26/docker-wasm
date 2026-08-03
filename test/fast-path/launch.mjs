@@ -1,10 +1,4 @@
-// Differential check for what the container actually launches.
-//
-// ENTRYPOINT and CMD interact through four rules that are easy to state wrongly
-// and impossible to notice getting wrong: an inherited CMD survives a child CMD
-// but not a child ENTRYPOINT, and a shell form ENTRYPOINT swallows CMD whole.
-// So build each case with docker, run it, and run what the fast path resolved
-// alongside it.
+// differential check: an inherited CMD survives a child CMD but not a child ENTRYPOINT, and a shell form ENTRYPOINT swallows CMD whole
 
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -36,7 +30,6 @@ const build = (tag, dockerfile) => {
   }
 }
 
-// A base with both set, so every case below has something to inherit.
 build(BASE, [
   'FROM alpine:3.21',
   'ENTRYPOINT ["/bin/echo", "base-ep"]',
@@ -52,16 +45,13 @@ const imageDefaults = {
   cmd: config.Cmd ?? undefined,
 }
 
-// What the fast path would launch, taken from the generated script rather than
-// from launchCommand directly, so the quoting on the way out is under test too.
 const fastLaunch = (instructions) => {
   const plan = planBuild('FROM ' + BASE + '\n' + instructions)
   if (plan.engine !== 'chroot') throw new Error('planner declined: ' + plan.reason)
   const script = chrootBuildScript({
     plan, layers: [], imageDefaults, readyMarker: '__R__', failMarker: '__F__',
   })
-  // The last `sh -c` in the script is the launch. Its body spans several lines,
-  // so it has to come out of the whole text rather than off the end.
+  // the last `sh -c` in the script is the launch, and its body spans several lines
   const pattern = /\/bin\/sh -c '((?:[^']|'\\'')*)'/g
   let body = null
   for (let match = pattern.exec(script); match; match = pattern.exec(script)) body = match[1]
@@ -75,7 +65,6 @@ const compare = (label, body) => {
   try {
     build('fkn-launch:case', 'FROM ' + BASE + '\n' + body)
     expected = run('docker', ['run', '--rm', 'fkn-launch:case']).out.trim()
-    // The same guest, entered the same way the generated script enters it.
     actual = run('docker', [
       'run', '--rm', '--entrypoint', '/bin/sh', BASE, '-c', fastLaunch(body),
     ]).out.trim()

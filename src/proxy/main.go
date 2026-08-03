@@ -1,14 +1,6 @@
 //go:build wasip1
 
-// c2w-webvpn-proxy: an in-browser network stack for container2wasm that gives
-// the guest container *real* TCP/UDP egress via @webvpn, instead of the
-// HTTP/HTTPS-only fetch() bridge upstream c2w-net-proxy is limited to.
-//
-// Drop-in replacement for c2w-net-proxy.wasm: same QEMU-socket framing from the
-// emulator, same WASI/listenfd plumbing. The only difference is the egress
-// seam (see webvpn.go + the netstack package).
-//
-// Build:  GOOS=wasip1 GOARCH=wasm go build -o c2w-webvpn-proxy.wasm .
+// Drop-in replacement for c2w-net-proxy.wasm: same QEMU-socket framing from the emulator, same WASI/listenfd plumbing.
 package main
 
 import (
@@ -36,8 +28,6 @@ func main() {
 	flag.BoolVar(&ingress, "ingress", false, "forward published FKN TCP ports to the guest")
 	flag.Parse()
 
-	// Always send our own log.Println output to stderr so we can see startup,
-	// dial errors etc. --debug only escalates the gvisor-tap-vsock verbosity.
 	log.SetOutput(os.Stderr)
 	if debug {
 		logrus.SetLevel(logrus.DebugLevel)
@@ -77,9 +67,7 @@ func main() {
 	}
 }
 
-// findListener locates the emulator's socket among the WASI preopens (or uses
-// the explicit fd) and wraps it as a net.Listener. Copied from upstream
-// c2w-net-proxy so the JS-side plumbing is unchanged.
+// findListener is copied from upstream c2w-net-proxy so the JS-side plumbing is unchanged.
 func findListener(listenFd int) (net.Listener, error) {
 	if listenFd == 0 {
 		for preopenFd := 3; ; preopenFd++ {

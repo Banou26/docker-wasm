@@ -1,11 +1,3 @@
-// Runs the converted container image: an emulated x86 or RISC-V machine
-// compiled to WebAssembly, booting Linux and the image's own entrypoint.
-//
-// Two channels leave this worker. The TTY channel carries the guest console.
-// The stream channel carries Ethernet frames to the netstack worker, relayed by
-// the main thread. Both are SharedArrayBuffer round-trips, because the guest is
-// a synchronous WASI program that cannot await anything.
-
 import { Ciovec, ERRNO_INVAL, Iovec, WASI, type Wasi } from '../wasi'
 import type { GuestWorkerInit } from '../protocol'
 import { Channel } from './channel'
@@ -87,8 +79,6 @@ const installConsoleImports = (wasi: Wasi, tty: TtyClient, socket: FrameSocket |
     }
 
     const events: PollEvent[] = []
-    // The guest parks here between ticks, so this call sets the whole runtime's
-    // idle latency: wait on the console, then drain any pending frames.
     if (stdinSub || (clockSub && timeout > 0)) {
       if (tty.onWaitForReadable(timeout / 1_000_000_000) && stdinSub) {
         events.push({ userdata: stdinSub.userdata, variant: 'fd_read' })

@@ -4,16 +4,10 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$here/.."
 bucket=fkn-container-assets
-# The app requests assets under a cache generation segment; read it from the
-# single place it is defined so the check follows the URL the browser uses.
 generation="$(sed -n "s/^export const ASSET_ROUTE_GENERATION = '\([^']*\)'.*/\1/p" "$here/../src/shared.ts")"
 [[ -n "$generation" ]] || { echo 'Could not read ASSET_ROUTE_GENERATION from src/shared.ts' >&2; exit 1; }
 asset_origin="https://container.fkn.app/wasm-assets/$generation"
 cache_control='public, max-age=31536000, immutable'
-# Brotli, not gzip: it takes the riscv64 demo image from 54 MB to 16 MB, and
-# every browser that can run the runtime at all negotiates it. Set
-# ASSET_CONTENT_ENCODING=gzip to publish for a Pages Function that still assumes
-# gzip.
 content_encoding="${ASSET_CONTENT_ENCODING:-br}"
 case "$content_encoding" in
 br) compressed_suffix=.br ;;
@@ -22,7 +16,6 @@ gzip) compressed_suffix=.gz ;;
 esac
 wrangler="$repo/node_modules/.bin/wrangler"
 
-# One target per run. Publishing several would interleave manifest rewrites.
 if [[ $# -ne 1 ]]; then
     echo 'Usage: npm run publish-wasm-assets -- <target>' >&2
     echo 'Targets: playground, runner, runner-riscv64, playground-riscv64, proxy, presets, all' >&2
@@ -35,9 +28,6 @@ playground)
     assets=('playground|/playground/playground.wasm|public/playground/playground.wasm|playground/playground|.wasm.js|application/wasm')
     ;;
 runner)
-    # The fast path's guest: busybox and nothing else, so a third of the builder's
-    # download and a far quicker boot. The page selects it from the build plan, so
-    # it has to be published before that selection can reach production.
     assets=('runner|/playground/runner.wasm|public/playground/runner.wasm|playground/runner|.wasm.js|application/wasm')
     ;;
 runner-riscv64)
@@ -146,11 +136,7 @@ for asset in "${assets[@]}"; do
     actual="${actual%% *}"
     [[ "$actual" == "$version" ]] || { echo "$name R2 digest does not match its object key" >&2; exit 1; }
 
-    # Requesting the public URL populates the CDN cache, and the response is
-    # stamped immutable for a year. Probing before the Pages Function can serve
-    # the object therefore pins a broken response until someone purges it. So
-    # when the caller has already said the Function is behind, do not touch the
-    # route at all.
+    # requesting the public URL pins the response at the edge for a year, so do not touch the route when the caller says the Function is behind
     if [[ "${ALLOW_PENDING_ASSET_ROUTE:-0}" == 1 ]]; then
         echo "$name is verified in R2. Live route not requested: ALLOW_PENDING_ASSET_ROUTE is set," >&2
         echo "which avoids caching a response the deployed Function cannot serve yet." >&2
@@ -163,9 +149,7 @@ for asset in "${assets[@]}"; do
     headers="${headers//$'\r'/}"
     headers="${headers,,}"
 
-    # Content-Encoding is negotiated at the edge and comes back as whatever the
-    # client asked for, so it says nothing about how the object was stored.
-    # Fetching the body and decoding it is the only check that can tell.
+    # content-encoding is negotiated at the edge, so only decoding the body tells how the object was stored
     if [[ "$status" == 200 ]]; then
         [[ "$headers" == *"content-type: $content_type"* ]] || { echo "$name has the wrong content type" >&2; exit 1; }
         [[ "$headers" == *$'cache-control: public, max-age=31536000, immutable'* ]] || { echo "$name has the wrong cache policy" >&2; exit 1; }

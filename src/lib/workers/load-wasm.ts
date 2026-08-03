@@ -1,10 +1,4 @@
-// Streaming instantiation for the guest and netstack modules.
-//
-// Streaming matters twice over for these artifacts: compilation overlaps the
-// download, and Chrome only populates its WebAssembly code cache for modules
-// compiled through the streaming entry points. That cache is what turns a
-// repeat visit into an near-instant start, so the fallback path is reserved for
-// responses a server mislabels.
+// Chrome only populates its WebAssembly code cache for modules compiled through the streaming entry points.
 
 import type { WorkerStage } from '../protocol'
 import { post } from './post'
@@ -41,8 +35,6 @@ export const instantiate = async (
     return result.instance
   }
 
-  // A server that does not label the module correctly forfeits streaming
-  // compilation and the code cache, so say so once rather than failing quietly.
   console.warn(
     '[fkn-container] ' + source + ' was served as "' + (contentType || 'no content type') +
     '". Serve it as application/wasm for streaming compilation.',

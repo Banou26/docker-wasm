@@ -1,9 +1,4 @@
-// The editor page builds in place, and shows the build while it happens.
-//
-// Two entry points have to work. Pressing the button must not navigate, because
-// navigating threw away the guest download the editor had just warmed. And a
-// link somebody was sent, which carries the Dockerfile in the hash, must go
-// straight to a build rather than to an editor showing something else.
+// pressing the button must not navigate: navigating threw away the guest download the editor had just warmed
 
 import { connect } from './cdp.mjs'
 
@@ -27,8 +22,6 @@ const DOCKERFILE = [
   '',
 ].join('\n')
 
-// The elements are all in the HTML, so their presence proves nothing about
-// whether the module has run. The outlook line is written by it.
 const EDITOR_READY = '!document.getElementById("build-outlook").hidden'
 
 const settle = (page) => page.waitFor(
@@ -45,8 +38,6 @@ const rowsOf = (page) => page.evaluate(`
     state: row.className,
     timing: row.querySelector('em').textContent,
   }))`)
-
-// --- pressing the button ----------------------------------------------------
 
 console.log('\n=== the button builds without leaving the page')
 {
@@ -69,8 +60,6 @@ console.log('\n=== the button builds without leaving the page')
     check('the editor makes way',
       await page.evaluate('document.getElementById("workbench").hasAttribute("hidden")'))
 
-    // The placeholder text is non-empty, so waiting on textContent alone returns
-    // before the plan arrives. data-engine is only set once it has.
     const summary = await page.waitFor(
       `(() => {
          const node = document.querySelector('.build-view-summary')
@@ -98,8 +87,6 @@ console.log('\n=== the button builds without leaving the page')
   }
 }
 
-// --- arriving with the Dockerfile already in the URL -------------------------
-
 console.log('\n=== a shared link goes straight to the build')
 {
   const encoded = Buffer.from(DOCKERFILE, 'utf8').toString('base64').replace(/=+$/, '')
@@ -118,8 +105,6 @@ console.log('\n=== a shared link goes straight to the build')
   }
 }
 
-// --- the transfer path, which has a row and a progress readout of its own ----
-
 console.log('\n=== a base image that has to be pulled')
 {
   const dockerfile = DOCKERFILE.replace('alpine:3.21', 'alpine:3.19')
@@ -129,7 +114,6 @@ console.log('\n=== a base image that has to be pulled')
     await page.waitFor('!document.getElementById("build-stage").hasAttribute("hidden")',
       { label: 'the build stage' })
 
-    // Caught while it is on screen; it is hidden again once the layers land.
     let transfer = null
     for (let attempt = 0; attempt < 300 && !transfer; attempt++) {
       transfer = await page.evaluate(`(() => {
@@ -151,8 +135,7 @@ console.log('\n=== a base image that has to be pulled')
     }
     check('the base image gets a row of its own',
       rows[0]?.text === 'FROM alpine:3.19', JSON.stringify(rows.map((row) => row.text)))
-    // The base row spans three markers. Reporting only the last gap made a
-    // transfer that took most of the build read as a fraction of a second.
+    // the base row spans three markers: reporting only the last gap made a long transfer read as a fraction of a second
     const baseSeconds = Number.parseFloat(rows[0]?.timing ?? '0')
     const runSeconds = rows.slice(1).reduce((total, row) => total + Number.parseFloat(row.timing), 0)
     check('and its duration covers the whole transfer, not one marker gap',

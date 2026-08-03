@@ -1,17 +1,4 @@
 /// <reference types="node" />
-// Vite plugin: point an import at a Dockerfile, get a URL to a browser-runnable
-// container.
-//
-//   import { containers } from '@fkn/container/vite'
-//   export default defineConfig({ plugins: [containers()] })
-//
-//   import image from './api/Dockerfile?container'
-//   const api = createContainer({ image, ports: [8080] })
-//
-// The conversion happens on the developer's machine, once per image change, so
-// the browser downloads a finished artifact instead of building one. The plugin
-// also sets the cross-origin isolation headers the runtime needs, because a
-// missing header is otherwise the first thing everyone hits.
 
 import { readFile } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
@@ -39,49 +26,21 @@ export const CROSS_ORIGIN_ISOLATION_HEADERS = {
 }
 
 export type ContainersOptions = {
-  // Default target architecture for every image.
-  //
-  // `amd64` runs any image and needs no extra host setup. `riscv64` produces an
-  // artifact around half the size on a faster emulator, but the image must have
-  // a riscv64 variant and its RUN steps need the matching binfmt handlers.
+  // default target arch; `riscv64` roughly halves the artifact but the image needs a riscv64 variant and binfmt handlers for its RUN steps
   arch?: TargetArch
-  // Guest RAM in MiB. The default suits a small service.
+  // guest RAM in MiB
   memoryMB?: number
-  // Where converted images are cached. Defaults to node_modules/.cache.
+  // where converted images are cached, defaults to node_modules/.cache
   cacheDir?: string
-  // Container CLI. Defaults to "docker".
+  // container CLI, defaults to "docker"
   builder?: string
-  // Path to an existing container2wasm binary. Built in a container otherwise.
+  // path to an existing container2wasm binary, built in a container otherwise
   c2wPath?: string
-  // How the page becomes cross-origin isolated, which the runtime requires.
-  //
-  // `headers` (default) sets COOP/COEP on the dev and preview servers, and
-  // expects your host to send them in production.
-  //
-  // `service-worker` additionally emits a worker that supplies those headers
-  // itself and registers it from every HTML entry. Use it when you cannot set
-  // headers on your host at all, such as GitHub Pages or a static CDN. It costs
-  // one page reload on a visitor's first load, needs HTTPS or localhost, and
-  // will not compose with an existing service worker at the same scope.
-  //
-  // `false` disables both.
+  // how the page becomes cross-origin isolated, which the runtime requires; `service-worker` emits a worker that sends the headers itself for hosts that cannot
   crossOriginIsolation?: boolean | 'headers' | 'service-worker'
-  // COEP value to request.
-  //
-  // `require-corp` (default) is supported everywhere, at the cost that every
-  // cross-origin resource the page loads must send CORP or be fetched with
-  // CORS, and cross-origin iframes must send COEP of their own.
-  //
-  // `credentialless` lets cross-origin subresources load without credentials
-  // and needs no cooperation from them, which is easier on an existing page,
-  // but Safari and Firefox for Android do not implement it. An unknown COEP
-  // value is ignored, so on those browsers the page is simply not isolated and
-  // the runtime cannot start at all. It does not cover cross-origin iframes
-  // either; the iframe `credentialless` attribute does, and that is Chromium
-  // only.
+  // Safari and Firefox for Android ignore `credentialless`, so on those browsers the page is simply not isolated and the runtime cannot start at all.
   coep?: 'credentialless' | 'require-corp'
-  // Named images built regardless of whether anything imports them. Useful for
-  // warming the cache in CI.
+  // named images built even when nothing imports them, for warming the cache in CI
   images?: Record<string, ImageSpec>
 }
 
@@ -132,8 +91,8 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
   let server: ViteDevServer | null = null
   let isBuild = false
 
-  const built = new Map<string, BuiltImage>()          // resolved id -> artifact
-  const watched = new Map<string, Set<string>>()       // watched file -> resolved ids
+  const built = new Map<string, BuiltImage>()
+  const watched = new Map<string, Set<string>>()
   const inFlight = new Map<string, Promise<BuiltImage>>()
 
   const log = (message: string): void => {
@@ -178,13 +137,8 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
     enforce: 'pre',
 
     config: () => ({
-      // The FKN transport is published against the Node built-ins. Map them to
-      // their browser implementations here so a consumer does not have to
-      // rediscover the list.
       resolve: {
-        // Exact matches only. A bare string alias also rewrites subpaths, so a
-        // `process` entry would turn `process/browser.js` into
-        // `process/browser/browser.js`.
+        // Exact matches only: a bare string alias also rewrites subpaths, turning `process/browser.js` into `process/browser/browser.js`.
         alias: [
           { find: /^node:buffer$/, replacement: 'buffer' },
           { find: /^node:events$/, replacement: 'events' },
@@ -197,12 +151,7 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
         ],
       },
       define: { global: 'globalThis' },
-      // The runtime spawns module workers; keep that format in dev too so the
-      // served and built pages behave the same.
       worker: { format: 'es' as const },
-      // The dev and preview servers can set the headers directly, which avoids
-      // the service worker's reload during development even when production
-      // will rely on it.
       ...(isolation === false ? {} : {
         server: { headers: { ...isolationHeaders } },
         preview: { headers: { ...isolationHeaders } },
@@ -241,7 +190,6 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
         if (!/^[\w.-]+\.wasm$/.test(name)) return next()
         const path = join(cacheDir, name)
         response.setHeader('Content-Type', 'application/wasm')
-        // The file name carries the image digest, so it is safe to pin.
         response.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
         createReadStream(path)
           .on('error', () => {
@@ -256,8 +204,6 @@ export const containers = (options: ContainersOptions = {}): Plugin => {
       order: 'pre',
       handler: () => (isolation !== 'service-worker' ? [] : [{
         tag: 'script',
-        // Synchronous and first in head: the sooner it registers, the sooner
-        // the one-time reload happens.
         attrs: { src: '/' + WORKER_FILE },
         injectTo: 'head-prepend',
       }]),

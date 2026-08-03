@@ -1,53 +1,17 @@
-// Which builder guest runs a given Dockerfile, and what that implies for the
-// base images pulled into it.
-//
-// There are two builder artifacts. riscv64 runs on c2w's TinyEMU backend and is
-// the one worth waiting for; amd64 runs on Bochs, which needs asyncify
-// instrumentation and is both larger and slower, but will build anything.
-//
-// The deciding fact is the base image, not a preference: buildah inside a
-// riscv64 guest has to execute the RUN steps of a riscv64 rootfs, so every FROM
-// in the Dockerfile needs a riscv64 variant on the registry. Alpine, Debian,
-// Ubuntu and busybox publish one; most language images do not.
-
 import { manifestPlatforms, dockerfileFromRefs } from './registry'
 
 export type BuilderArch = 'riscv64' | 'amd64'
 
-// Which guest, independent of architecture.
-//
-// `runner` is bare alpine: busybox has the wget, tar and chroot the fast path
-// needs, and nothing else. `builder` additionally carries buildah, for
-// Dockerfiles the fast path cannot express. The difference is not marginal:
-// carrying buildah roughly triples the download and moves the boot from a
-// TinyEMU-class ~1.2s to a Bochs-class ~8s.
 export type GuestKind = 'runner' | 'builder'
 
 export type Builder = {
   arch: BuilderArch
   kind: GuestKind
-  // Path to the converted guest, before asset versioning.
   wasmPath: string
-  // Platform the page must pull base images for, so the layers it hands the
-  // guest are executable inside it.
   platform: { os: string; arch: string }
-  // Brotli-compressed size, measured rather than guessed, so the status view can
-  // show a real total before the first byte arrives.
+  // Brotli-compressed size, measured rather than guessed, so the status view can show a real total before the first byte arrives.
   approximateDownloadBytes: number
-  // The image this guest was built FROM, when it is one a Dockerfile might name.
-  //
-  // Getting a base image into the guest is the single dominant cost of a build:
-  // 3.4 MB through the artifact bridge measured at 317s on riscv64, where the
-  // build steps themselves are under a second. When the Dockerfile asks for the
-  // image the guest already is, all of that is avoidable.
   baseImage?: string
-  // That image's own config, which a build against it needs and an in-place
-  // build never pulls. Without it the guest's own working directory and
-  // environment stand in for the image's, which are not the same thing: this
-  // guest adds `WORKDIR /work`, where the image itself sits at `/`.
-  //
-  // Checked against the registry by `npm run verify-guest-base` rather than
-  // trusted, since the two only agree as long as nobody edits one of them.
   baseImageConfig?: {
     env?: string[]
     workdir?: string
@@ -56,16 +20,14 @@ export type Builder = {
   }
 }
 
-// docker.io/library/alpine:3.21, verified against the registry.
+// docker.io/library/alpine:3.21, checked against the registry by `npm run verify-guest-base` rather than trusted.
 const ALPINE_321_CONFIG = {
   env: ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'],
   workdir: '/',
   cmd: ['/bin/sh'],
 }
 
-// docker.io/library/alpine:3.21, alpine:3.21 and alpine (when 3.21 is current)
-// are the same image; only the first two are worth matching, since `latest`
-// moves and guessing wrong means building against the wrong base.
+// Only tagged refs match, since `latest` moves and guessing wrong means building against the wrong base.
 export const sameImage = (a: string, b: string): boolean => {
   const normalise = (ref: string): string => {
     let rest = ref.trim()
@@ -111,34 +73,25 @@ export const GUESTS: Record<GuestKind, Record<BuilderArch, Builder>> = {
   },
 }
 
-// Kept for the existing buildah call sites; the fast path goes through GUESTS.
 export const BUILDERS: Record<BuilderArch, Builder> = GUESTS.builder
 
-// amd64 until the riscv64 guest's inbound fetch from the artifact bridge is
-// fixed: it boots in 7.8s and is a third smaller, but `wget` of the base image
-// archive from the in-page gateway stalls indefinitely, where the amd64 guest
-// completes it over the same bridge. Everything else here is ready for the flip.
+// amd64 until the riscv64 guest's `wget` of the base image archive from the in-page gateway stops stalling indefinitely.
 export const DEFAULT_BUILDER_ARCH = 'amd64' as BuilderArch
 
 export type BuilderChoice = {
   builder: Builder
-  // Why, in words the status view can show without further translation.
   reason: string
-  // Refs that forced amd64, if any.
   unsupportedRefs: string[]
 }
 
 const choiceCache = new Map<string, Promise<boolean>>()
 
-// Whether one image reference publishes a riscv64 variant. Manifest lists only,
-// so this is one small request per ref and safe to run while the user types.
 const hasRiscv64 = (ref: string): Promise<boolean> => {
   const cached = choiceCache.get(ref)
   if (cached) return cached
   const probe = manifestPlatforms(ref)
     .then((platforms) => platforms.some((p) => p.arch === 'riscv64' && p.os === 'linux'))
-    // A ref we cannot resolve is not evidence either way. Say no, so the answer
-    // is the builder that can run anything rather than one that may not.
+    // A ref that cannot be resolved is not evidence either way, so answer no and get the builder that can run anything rather than one that may not.
     .catch(() => false)
   choiceCache.set(ref, probe)
   return probe
@@ -155,9 +108,7 @@ export const chooseBuilder = async (dockerfileText: string): Promise<BuilderChoi
   const supported = await Promise.all(refs.map(hasRiscv64))
   const unsupportedRefs = refs.filter((_, index) => !supported[index])
 
-  // While the default is amd64 the probe result is advisory: it decides nothing
-  // yet, but it is what the flip will switch on, and running it now keeps the
-  // path exercised rather than dead code.
+  // While the default is amd64 the probe result is advisory: running it now keeps the path exercised rather than dead code.
   if (DEFAULT_BUILDER_ARCH !== 'riscv64') {
     return {
       builder: fallback,

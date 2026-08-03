@@ -112,10 +112,7 @@ main {
   min-height: 420px;
   padding: 72px 0 54px;
   display: grid;
-  /* The right column carries a paragraph, a code block and the fact row, so it
-     is the tall one. Bottom alignment therefore sank the title most of the way
-     down the section; the two columns read as one block when their tops line up.
-     430px is the width the code sample needs before it starts scrolling. */
+  /* 430px is the width the code sample needs before it starts scrolling */
   grid-template-columns: minmax(0, 1.2fr) minmax(430px, 0.8fr);
   align-items: start;
   gap: 64px;
@@ -168,9 +165,6 @@ main {
 }
 
 .hero-facts {
-  /* The code block above carries a 5px offset shadow, and it only stopped
-     colliding with this row while the sample was narrow enough to show a
-     scrollbar. Space it explicitly rather than relying on that. */
   margin-top: 22px;
   display: flex;
   flex-wrap: wrap;
@@ -525,7 +519,6 @@ main {
   font-size: 11px;
 }
 
-/* What the button is about to do, worked out from the source as it is typed. */
 .build-outlook {
   margin: 0;
   padding: 9px 11px;
@@ -542,7 +535,6 @@ main {
   display: none;
 }
 
-/* The build, in place of the editor, on the same page. */
 .build-stage {
   border-top: 1px solid var(--line);
   display: grid;
@@ -760,8 +752,6 @@ main {
   color: var(--orange);
 }
 
-/* The terminal keeps the dark treatment it has on the runtime page, scoped to
-   this panel rather than to the document, so the editor above it is unaffected. */
 .build-stage .terminal-frame {
   min-width: 0;
   display: grid;
@@ -946,9 +936,7 @@ main {
   font-size: 14px;
 }
 
-/* Flex rather than fixed columns: the chain is cards separated by arrows, and a
-   column template has to be rewritten every time one is added. It was declared
-   with three cards and silently wrapped the fourth onto a row of its own. */
+/* flex rather than fixed columns: a column template has to be rewritten every time a card is added */
 .signal-chain {
   display: flex;
   align-items: center;
@@ -1014,8 +1002,6 @@ a:focus-visible {
   outline-offset: 3px;
 }
 
-/* Between here and the single-column breakpoint the chain shares a row with the
-   copy, which leaves each card under 100px. Two up keeps them readable. */
 @media (max-width: 1200px) {
   .signal-chain {
     flex-wrap: wrap;
@@ -1169,8 +1155,6 @@ a:focus-visible {
   }
 }
 
-/* ---------------------------------------------------------------- homepage */
-
 .topbar-link {
   padding-left: 14px;
   border-left: 1px solid var(--line);
@@ -1210,8 +1194,6 @@ a:focus-visible {
 .tok-num { color: #8fb8ff; }
 .tok-fn  { color: #f7f4e8; font-weight: 700; }
 .tok-prop { color: #9ad7ff; }
-
-/* -- live demo ------------------------------------------------------------ */
 
 .demo {
   padding: 18px 0 64px;
@@ -1351,8 +1333,6 @@ footer code {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
 }
-
-/* -- request / response console ------------------------------------------- */
 
 .console {
   border: 1px solid var(--ink);
@@ -1553,8 +1533,6 @@ footer code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
-/* -- integration cards ---------------------------------------------------- */
 
 .howto {
   padding: 44px 0 56px;

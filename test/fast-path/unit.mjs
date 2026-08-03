@@ -1,9 +1,4 @@
-// Unit checks for the parser, planner and emitter.
-//
-// Nothing here needs a browser or a guest. The differential checks in
-// diff.mjs are the ones that decide whether the output matches docker; these
-// pin the shape so a regression shows up as a named failure rather than as a
-// wrong image three minutes into a build.
+// Unit checks for the parser, planner and emitter: they pin the shape so a regression shows up as a named failure rather than as a wrong image.
 
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -28,9 +23,7 @@ const ALPINE = {
   cmd: ['/bin/sh'],
 }
 
-// Each step's body is nested inside a single quoted `sh -c`, so matching the
-// outer text for it proves nothing about what the shell will see. Pull the
-// bodies out and undo the quoting first.
+// each step's body is nested inside a single quoted `sh -c`, so matching the outer text proves nothing
 const bodies = (text) => {
   const out = []
   const pattern = /\/bin\/sh -c '((?:[^']|'\\'')*)'/g
@@ -47,8 +40,6 @@ const script = (text, opts = {}) => chrootBuildScript({
   readyMarker: '__R__',
   failMarker: '__F__',
 })
-
-// --- parser ----------------------------------------------------------------
 
 {
   const parsed = parseDockerfile('FROM a\nRUN echo one \\\n  two\n')
@@ -79,8 +70,6 @@ check('RUN heredoc falls back',
 check('FROM --platform falls back',
   planBuild('FROM --platform=linux/arm64 alpine\nRUN true\n').engine === 'buildah')
 
-// --- word parsing ----------------------------------------------------------
-
 check('unquoted value expands',
   JSON.stringify(parseWord('/opt:$PATH')) ===
   JSON.stringify([{ kind: 'literal', value: '/opt:' }, { kind: 'variable', expression: 'PATH' }]))
@@ -100,8 +89,6 @@ check('legacy ENV form', JSON.stringify(parseEnv('NAME some value').map(b => [b.
   JSON.stringify([['NAME', 'some value']]))
 check('multiple ENV pairs', JSON.stringify(parseEnv('A=1 B="two words"').map(b => [b.key, wordText(b.value)])) ===
   JSON.stringify([['A', '1'], ['B', 'two words']]))
-
-// --- ordering --------------------------------------------------------------
 
 {
   const plan = planBuild('FROM alpine\nENV V=1\nRUN echo $V\nENV V=2\nRUN echo $V\n')
@@ -126,8 +113,6 @@ check('multiple ENV pairs', JSON.stringify(parseEnv('A=1 B="two words"').map(b =
   check('a re-assignment is kept as its own entry, not folded into the first',
     plan.steps[0].env.map(b => b.key + '=' + wordText(b.value)).join(',') === 'A=1,B=$A,A=2')
 }
-
-// --- emitted shell ---------------------------------------------------------
 
 {
   const body = bodies(script('FROM alpine\nWORKDIR /app\nRUN pwd\n'))[0]
@@ -164,8 +149,6 @@ check('multiple ENV pairs', JSON.stringify(parseEnv('A=1 B="two words"').map(b =
   })
   check('in-place skips the chroot', !text.includes('chroot '))
   check('in-place skips the device setup', !text.includes('mknod'))
-  // The guest adds its own WORKDIR /work on top of the image it was built from,
-  // so an in-place build has to be told where the image itself sits.
   check('in-place still enters the image working directory',
     bodies(text)[0].includes("cd '/' || exit 1"), bodies(text)[0])
 }
@@ -200,8 +183,6 @@ check('never mentions buildah', !script('FROM alpine\nRUN true\n').includes('bui
   check('the ready marker precedes the launch', text.indexOf('__R__') < text.indexOf('starting container'))
 }
 
-// --- launch resolution -----------------------------------------------------
-
 const launch = (text, defaults) => launchCommand(planBuild('FROM a\n' + text), defaults)
 check('image CMD applies when the Dockerfile sets none',
   launch('RUN x\n', { cmd: ['/bin/busybox', 'httpd'] }) === "'/bin/busybox' 'httpd'")
@@ -223,12 +204,6 @@ check('an empty exec form ENTRYPOINT clears both',
 check('falls back to a shell', launch('RUN x\n', {}) === '/bin/sh')
 check('an inherited entrypoint applies',
   launch('CMD ["c"]\n', { entrypoint: ['i'] }) === "'i' 'c'")
-
-// --- what the editor page hands the runtime --------------------------------
-//
-// The runtime honours an explicit wasm URL over its own plan, so pinning one for
-// an edited Dockerfile silently disables the fast path. That is exactly what the
-// button used to do.
 
 {
   const launch = planLaunch({ dockerfile: 'FROM alpine:3.21\nRUN echo hi\n', mode: 'shell' })
@@ -254,8 +229,6 @@ check('an inherited entrypoint applies',
   const launch = planLaunch({ dockerfile: PRESET_DOCKERFILES.shell, mode: 'shell' })
   const pinned = new URL(launch.url, 'https://x.invalid').searchParams.get('wasm-url')
   check('a preset does pin its own artifact', pinned !== null, launch.url)
-  // The runtime only ignores a pinned URL it recognises as a preset's, which is
-  // the check that made the old bug invisible.
   check('and the runtime recognises it as one', isPresetWasmURL(pinned ?? ''), pinned)
 }
 {
@@ -274,8 +247,6 @@ check('an inherited entrypoint applies',
   check('and says what it will pull when it is not',
     launch.summary.includes('pull debian:12'), launch.summary)
 }
-
-// --- the shell must actually accept it -------------------------------------
 
 const dir = import.meta.dirname
 for (const [label, text] of [

@@ -1,12 +1,5 @@
 #!/usr/bin/env node
 /// <reference types="node" />
-// fkn-container: build a Dockerfile into a browser-runnable WebAssembly image.
-//
-//   npx fkn-container build ./api/Dockerfile --out public/api.wasm
-//
-// The Vite plugin is the same conversion wired into a dev server. This exists
-// for projects that do not use Vite, and for CI steps that want to warm the
-// cache before a build.
 
 import { copyFile, mkdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'

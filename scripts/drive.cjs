@@ -1,5 +1,3 @@
-// drive.cjs - boot alpine+curl in headless chrome via @webvpn, run curl,
-// capture proof. Reads xterm's buffer directly via window.xterm.
 const puppeteer = require('puppeteer-core')
 
 const url = process.env.URL || 'http://127.0.0.1:8080/playground/?net=webvpn'
@@ -35,11 +33,9 @@ const readTerminal = () => {
     })
     page.on('pageerror', e => console.log('[pageerror]', e.message))
 
-    // capture all network requests / failures for diagnostics
     const reqs = []
     page.on('request', r => reqs.push({ method: r.method(), url: r.url() }))
     page.on('requestfailed', r => reqs.push({ failed: true, url: r.url(), err: r.failure()?.errorText }))
-    // capture iframe console too - the WebTransport happens there
     browser.on('targetcreated', async (t) => {
         try {
             const f = await t.page()
@@ -53,7 +49,6 @@ const readTerminal = () => {
     console.log('navigating to', url)
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
     console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated))
-    // Give @fkn/lib a moment to inject its iframe
     await new Promise(r => setTimeout(r, 3000))
     const ifrs = await page.evaluate(() =>
         Array.from(document.querySelectorAll('iframe')).map(f => ({ src: f.src, credentialless: f.credentialless }))
@@ -66,7 +61,6 @@ const readTerminal = () => {
     await page.waitForSelector('#terminal', { timeout: 30000 })
     await page.waitForFunction('typeof window.xterm === "object"', { timeout: 30000 })
 
-    // Wait for a shell prompt by polling the xterm buffer.
     console.log('waiting for boot prompt (up to 15 min)...')
     const deadline = Date.now() + 15 * 60 * 1000
     let booted = false
@@ -78,7 +72,6 @@ const readTerminal = () => {
             console.log('--- terminal (tail) at boot ---\n' + txt.split('\n').filter(Boolean).slice(-20).join('\n'))
             break
         }
-        // periodic screenshot for visual progress
         if (Date.now() - lastSnap > 30000) {
             lastSnap = Date.now()
             const elapsed = Math.round((Date.now() - (deadline - 15*60*1000)) / 1000)
@@ -99,13 +92,11 @@ const readTerminal = () => {
         process.exit(2)
     }
 
-    // Phase A: test TCP via @webvpn by curling a direct IP (no DNS).
-    // 1.1.1.1 is Cloudflare's DNS frontend, also serves HTTPS at /.
+    // a direct IP so no DNS is involved; 1.1.1.1 also serves HTTPS at /
     await page.click('#terminal')
     await new Promise(r => setTimeout(r, 500))
     await page.keyboard.type('curl -ksS --connect-timeout 30 https://1.1.1.1/ -o /tmp/x ; echo CURL_EXIT=$? ; head -3 /tmp/x\n', { delay: 25 })
 
-    // Wait for curl output. 1.1.1.1's HTTPS root returns a small HTML or 301.
     const cdl = Date.now() + 90 * 1000
     let success = false
     while (Date.now() < cdl) {

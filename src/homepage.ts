@@ -1,10 +1,3 @@
-// Container Lab homepage.
-//
-// Starts the demo container in the page and lets the visitor drive real HTTP
-// requests at it. The demo image answers with what it saw, so the JSON on the
-// right is assembled by busybox inside the guest rather than being a canned
-// string, and the stdout pane shows the same request arriving in Linux.
-
 import { assertCrossOriginIsolated, createContainer, preloadContainer, type Container } from './lib'
 import { PRESET_WASM_PATHS } from './presets'
 import { withWasmAssetVersion } from './shared'
@@ -60,8 +53,6 @@ const seconds = (ms: number): string =>
 const megabytes = (bytes: number): string => (bytes / 1e6).toFixed(1) + ' MB'
 
 const decoder = new TextDecoder()
-// The guest console is a real TTY: CSI sequences, charset selects, and other
-// control bytes would otherwise be printed literally into a plain <pre>.
 const ANSI = /\u001B(?:\[[0-9;?]*[ -/]*[@-~]|[()][A-Za-z0-9]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)?|[=>NOM78])/g
 const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
 
@@ -100,7 +91,7 @@ const renderResponse = async (response: Response, elapsedMs: number): Promise<vo
   if (contentType.includes('application/json')) {
     try {
       bodyMarkup = '<pre class="body-block">' + highlightJson(JSON.parse(raw)) + '</pre>'
-    } catch { /* leave it raw */ }
+    } catch {}
   }
 
   responseBody.innerHTML =
@@ -268,8 +259,6 @@ for (const button of requestForm.querySelectorAll<HTMLButtonElement>('.request-h
 }
 
 bootButton.addEventListener('click', boot)
-// Warming the module before the click removes the download from the perceived
-// startup time on a first visit.
 for (const event of ['pointerenter', 'focus'] as const) {
   bootButton.addEventListener(event, () => {
     void preloadContainer(imageURL).catch(() => {})
